@@ -1,0 +1,9 @@
+# Leave username blank to disable logging in.
+
+[GuttenPlag]
+username =
+password =
+
+[VroniPlag]
+username =
+password =
