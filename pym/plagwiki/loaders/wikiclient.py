@@ -29,37 +29,47 @@ class WikiClient(object):
         self._curl.setopt(pycurl.MAXREDIRS, 5)
         self._curl.setopt(pycurl.USERAGENT, DEFAULT_USERAGENT.encode('utf-8'))
         self._curl.setopt(pycurl.COOKIEFILE, str(''))
+        self._useragent = DEFAULT_USERAGENT
         self._edittoken = ''
         self._logged_in = False
 
     def __del__(self):
         self.logout()
 
+    def get_user_agent(self):
+        return self._useragent
+
     def set_user_agent(self, user_agent):
-        self._curl.setopt(pycurl.USERAGENT, user_agent.encode('utf-8'))
+        self._useragent = unicode(user_agent)
+        self._curl.setopt(pycurl.USERAGENT, self._useragent.encode('utf-8'))
 
     def login(self, username, password):
         r_prelogin = self._query_api(action='login',
                 lgname=username, lgpassword=password)
         try:
+            if r_prelogin['login']['result'] == 'WrongPass':
+                raise WikiError('Login failed, wrong password!')
             if r_prelogin['login']['result'] != 'NeedToken':
-                raise KeyError('result')
+                raise LookupError()
             prelogin_token = r_prelogin['login']['token']
-        except(KeyError):
+        except(LookupError):
             raise WikiError('MediaWiki pre-login request failed (expected' +
-                            ' NeedToken), here is the full response: ' +
-                            "\n" + pprint.pformat(r_prelogin))
+                    ' NeedToken), here is the full response: ' +
+                    "\n" + pprint.pformat(r_prelogin))
         r_login = self._query_api(action='login',
                 lgname=username, lgpassword=password,
                 lgtoken=prelogin_token)
         try:
+            if r_login['login']['result'] == 'WrongPass':
+                raise WikiError('Login failed, wrong password!')
             if r_login['login']['result'] != 'Success':
-                raise KeyError('result')
-        except(KeyError):
+                raise LookupError()
+        except(LookupError):
             raise WikiError('MediaWiki login request failed,' +
-                            ' here is the full response: ' +
-                            "\n" + pprint.pformat(r_login))
+                    ' here is the full response: ' +
+                    "\n" + pprint.pformat(r_login))
         self._logged_in = True
+        self._edittoken = ''
 
     def logout(self):
         if self._logged_in:
@@ -67,11 +77,29 @@ class WikiClient(object):
                 self._query_api(action='logout')
             except(WikiError) as err:
                 print(unicode(err), file=sys.stderr)
-                print('Warning: MediaWiki logout request failed!', file=sys.stderr)
-            self._logged_in = False
+                print('Warning: MediaWiki logout request failed!',
+                        file=sys.stderr)
+            else:
+                self._logged_in = False
+                self._edittoken = ''
 
     def is_logged_in(self):
         return self._logged_in
+
+    def request_edittoken(self):
+        if not self.has_edittoken():
+            r_edittoken = self._query_api(action='query', prop='info',
+                    intoken='edit', titles=self._mainpage)
+            try:
+                self._edittoken = unicode(
+                        r_edittoken['query']['pages'].values()[0]['edittoken'])
+            except(LookupError):
+                raise WikiError('MediaWiki edit token request failed,' +
+                    ' here is the full response: ' +
+                    "\n" + pprint.pformat(r_edittoken))
+
+    def has_edittoken(self):
+        return self._edittoken != ''
 
     def _query_api(self, **kw):
         """Perform a raw MediaWiki API request.
