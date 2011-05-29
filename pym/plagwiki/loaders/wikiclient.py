@@ -9,6 +9,7 @@ import json
 import os
 import pprint
 import pycurl
+import sys
 
 from plagwiki.loaders.wikierror import WikiError
 
