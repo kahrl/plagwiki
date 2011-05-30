@@ -101,6 +101,22 @@ class WikiClient(object):
     def has_edittoken(self):
         return self._edittoken != ''
 
+    def upload(self, local_filename, remote_filename=None, text=None, comment=None):
+        if remote_filename is None:
+            remote_filename = os.path.basename(local_filename)
+        self.request_edittoken()
+        r_upload = self._query_api(action='upload', filename=remote_filename,
+                ignorewarnings='', token=self._edittoken,
+                text=text, comment=comment,
+                file=(local_filename, 'file', 'application/octet-stream'))
+        try:
+            if r_upload['upload']['result'] != 'Success':
+                raise LookupError()
+        except(LookupError):
+            raise WikiError('MediaWiki upload request failed,' +
+                ' here is the full response: ' +
+                "\n" + pprint.pformat(r_upload))
+
     def _query_api(self, **kw):
         """Perform a raw MediaWiki API request.
 
@@ -146,6 +162,8 @@ class WikiClient(object):
             argvalue = kw[argname]
             argname = unicode(argname)
 
+            if argvalue is None:
+                continue
             if not isinstance(argvalue, (list, tuple)):
                 argvalue = (argvalue, 'string', None)
             argvalue = tuple(argvalue)
