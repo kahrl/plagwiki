@@ -4,6 +4,7 @@
 # ease eventual Python 3 transition
 from __future__ import division, print_function, unicode_literals
 
+import hashlib
 import io
 import json
 import os
@@ -27,8 +28,8 @@ class WikiClient(object):
         self._curl.setopt(pycurl.NOPROGRESS, 1)
         self._curl.setopt(pycurl.FOLLOWLOCATION, 1)
         self._curl.setopt(pycurl.MAXREDIRS, 5)
-        self._curl.setopt(pycurl.USERAGENT, DEFAULT_USERAGENT.encode('utf-8'))
-        self._curl.setopt(pycurl.COOKIEFILE, str(''))
+        self._curl.setopt(pycurl.USERAGENT, self._to_utf8(DEFAULT_USERAGENT))
+        self._curl.setopt(pycurl.COOKIEFILE, self._to_utf8(''))
         self._useragent = DEFAULT_USERAGENT
         self._edittoken = ''
         self._logged_in = False
@@ -41,7 +42,7 @@ class WikiClient(object):
 
     def set_user_agent(self, user_agent):
         self._useragent = unicode(user_agent)
-        self._curl.setopt(pycurl.USERAGENT, self._useragent.encode('utf-8'))
+        self._curl.setopt(pycurl.USERAGENT, self._to_utf8(self._useragent))
 
     def login(self, username, password):
         r_prelogin = self._query_api(action='login',
@@ -86,6 +87,15 @@ class WikiClient(object):
     def is_logged_in(self):
         return self._logged_in
 
+    def purge(self, title):
+        r_purge = self._query_api(action='purge', titles=title)
+        # TODO verify success
+
+    def purge_multi(self, titles):
+        titles_joined = '|'.join(titles)
+        r_purge = self._query_api(action='purge', titles=titles_joined)
+        # TODO verify success
+
     def request_edittoken(self):
         if not self.has_edittoken():
             r_edittoken = self._query_api(action='query', prop='info',
@@ -101,13 +111,29 @@ class WikiClient(object):
     def has_edittoken(self):
         return self._edittoken != ''
 
-    def upload(self, local_filename, remote_filename=None, text=None, comment=None):
+    def edit(self, title, text, summary=None, minor=True, bot=True):
+        self.request_edittoken()
+        text = unicode(text)
+        md5 = hashlib.md5(self._to_utf8(text)).hexdigest()
+        r_edit = self._query_api(action = 'edit',
+                title = title, text = text, md5 = md5, summary = summary,
+                token = self._edittoken, minor = bool(minor), bot = bool(bot),
+                watchlist = 'nochange')
+        try:
+            if r_edit['edit']['result'] != 'Success':
+                raise LookupError()
+        except(LookupError):
+            raise WikiError('MediaWiki edit request failed,' +
+                    ' here is the full response: ' +
+                    "\n" + pprint.pformat(r_edit))
+
+    def upload(self, local_filename, remote_filename=None, text=None, summary=None):
+        self.request_edittoken()
         if remote_filename is None:
             remote_filename = os.path.basename(local_filename)
-        self.request_edittoken()
         r_upload = self._query_api(action='upload', filename=remote_filename,
                 ignorewarnings='', token=self._edittoken,
-                text=text, comment=comment,
+                text=text, comment=summary,
                 file=(local_filename, 'file', 'application/octet-stream'))
         try:
             if r_upload['upload']['result'] != 'Success':
@@ -136,7 +162,7 @@ class WikiClient(object):
         three elements: (value, is_file, contenttype)
         value:        The file name (if is_file is 'file') or value (if
                       is_file is 'string'). Need not be a string if is_file
-                      is 'string', as it is passed through str() first.
+                      is 'string', as it is passed through unicode() first.
         is_file:      Whether value is the name of a file to be uploaded
                       ('file') or should be passed as-is ('string').
         contenttype:  The MIME type. This may be set to None if not needed.
@@ -173,21 +199,24 @@ class WikiClient(object):
                 argvalue = (argvalue[0], argvalue[1], None)
             elif len(argvalue) != 3:
                 raise ValueError('keyword argument is not a 3-tuple: ' +
-                                 str(argvalue))
+                                 unicode(argvalue))
+
             value, is_file, contenttype = argvalue
+            if isinstance(value, bool):
+                value = unicode(value).lower()
             if is_file != 'file' and is_file != 'string':
                 raise ValueError('second entry of keyword argument must be' +
-                                 '\'file\' or \'string\': ' + str(is_file))
+                                 '\'file\' or \'string\': ' + unicode(is_file))
             if is_file == 'file':
-                formfield = [pycurl.FORM_FILE, str(value)]
+                formfield = [pycurl.FORM_FILE, self._to_utf8(value)]
             else:
-                formfield = [pycurl.FORM_CONTENTS, str(value)]
+                formfield = [pycurl.FORM_CONTENTS, self._to_utf8(value)]
             if contenttype is not None:
-                formfield += [pycurl.FORM_CONTENTTYPE, str(contenttype)]
-            form.append((str(argname), tuple(formfield)))
+                formfield += [pycurl.FORM_CONTENTTYPE, self._to_utf8(contenttype)]
+            form.append((self._to_utf8(argname), tuple(formfield)))
 
         buffer = io.BytesIO()
-        self._curl.setopt(pycurl.URL, self._api.encode('utf-8'))
+        self._curl.setopt(pycurl.URL, self._to_utf8(self._api))
         self._curl.setopt(pycurl.HTTPPOST, form)
         self._curl.setopt(pycurl.WRITEFUNCTION, buffer.write)
 
@@ -210,6 +239,9 @@ class WikiClient(object):
                              unicode(err) + "\n\n" +
                              "Response was:\n" +
                              self._truncate_text(response_uni, 500))
+
+    def _to_utf8(self, value):
+        return unicode(value).encode('utf-8')
 
     def _truncate_text(self, text, limit):
         if len(text) <= limit:
