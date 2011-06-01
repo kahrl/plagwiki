@@ -53,7 +53,7 @@ class WikiClient(object):
             if r_prelogin['login']['result'] != 'NeedToken':
                 raise LookupError()
             prelogin_token = r_prelogin['login']['token']
-        except(LookupError):
+        except(LookupError,TypeError):
             raise WikiError('MediaWiki pre-login request failed (expected' +
                     ' NeedToken), here is the full response: ' +
                     "\n" + pprint.pformat(r_prelogin))
@@ -65,7 +65,7 @@ class WikiClient(object):
                 raise WikiError('Login failed, wrong password!')
             if r_login['login']['result'] != 'Success':
                 raise LookupError()
-        except(LookupError):
+        except(LookupError,TypeError):
             raise WikiError('MediaWiki login request failed,' +
                     ' here is the full response: ' +
                     "\n" + pprint.pformat(r_login))
@@ -103,7 +103,7 @@ class WikiClient(object):
             try:
                 self._edittoken = unicode(
                         r_edittoken['query']['pages'].values()[0]['edittoken'])
-            except(LookupError):
+            except(LookupError,TypeError):
                 raise WikiError('MediaWiki edit token request failed,' +
                     ' here is the full response: ' +
                     "\n" + pprint.pformat(r_edittoken))
@@ -122,7 +122,7 @@ class WikiClient(object):
         try:
             if r_edit['edit']['result'] != 'Success':
                 raise LookupError()
-        except(LookupError):
+        except(LookupError,TypeError):
             raise WikiError('MediaWiki edit request failed,' +
                     ' here is the full response: ' +
                     "\n" + pprint.pformat(r_edit))
@@ -138,7 +138,7 @@ class WikiClient(object):
         try:
             if r_upload['upload']['result'] != 'Success':
                 raise LookupError()
-        except(LookupError):
+        except(LookupError,TypeError):
             raise WikiError('MediaWiki upload request failed,' +
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_upload))
