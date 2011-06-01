@@ -18,10 +18,9 @@ from plagwiki.loaders.wikierror import WikiError
 DEFAULT_USERAGENT = 'plagwiki/0.1a'
 
 class WikiClient(object):
-    def __init__(self, api, ask, mainpage):
+    def __init__(self, api, ask):
         self._api = api
         self._ask = ask
-        self._mainpage = mainpage
         self._curl = pycurl.Curl()
         self._curl.setopt(pycurl.VERBOSE, 0)
         self._curl.setopt(pycurl.HEADER, 0)
@@ -99,7 +98,7 @@ class WikiClient(object):
     def request_edittoken(self):
         if not self.has_edittoken():
             r_edittoken = self._query_api(action='query', prop='info',
-                    intoken='edit', titles=self._mainpage)
+                    intoken='edit', titles='DummyEditTokenPage')
             try:
                 self._edittoken = unicode(
                         r_edittoken['query']['pages'].values()[0]['edittoken'])
