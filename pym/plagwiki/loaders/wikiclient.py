@@ -31,7 +31,7 @@ class WikiClient(object):
     SMW queries) is planned for the future.
 
     Almost all methods (except the most simplest getters) may raise
-    exception, in particular those that access the API. In case of
+    exceptions, in particular those that access the API. In case of
     problems with the API or the wiki itself, a WikiError is raised.
 
     """
@@ -522,7 +522,7 @@ class WikiClient(object):
 
         You should always log in (preferably using a bot account) before
         editing wiki pages. Particularly if doing automated edits, state
-        the name of purpose of the bot in the edit summary.
+        the name and purpose of the bot in the edit summary.
 
         """
         self.request_edittoken()
@@ -557,7 +557,7 @@ class WikiClient(object):
         You may have to log in before uploading files. Remember that the
         list of acceptable file types is limited and depends on the wiki
         configuration. Particularly if doing automated upload, state
-        the name of purpose of the bot in the upload summary.
+        the name and purpose of the bot in the upload summary.
 
         """
         self.request_edittoken()
