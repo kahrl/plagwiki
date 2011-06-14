@@ -292,22 +292,24 @@ class WikiClient(object):
         title is the requested page name.
 
         Returns a dict with the following items:
-          'counter':   number of views, unless disabled in server settings
-          'lastrevid': last revision ID
-          'length':    page size
-          'new':       defined (and empty) iff the page has only one revision
-          'ns':        namespace
-          'pageid':    page ID
-          'redirect':  defined (and empty) iff the page is a redirect
-          'revisions': source code of latest revision (in
-                       result['revisions'][0]['*'])
-          'title':     title
-          'touched':   page_touched property: timestamp that is updated
-                       whenever the page must be re-rendered, e.g. due to
-                       editing of the page itself or a linked template
-          'missing':   Denotes that the page does not exist (or has been
-                       deleted). Most other fields are missing if this one is
-                       present, only 'title' and 'ns' are there.
+          'categories': list of categories the page belongs to, each
+                        represented as a dict with 'ns' and 'title' keys
+          'counter':    number of views, unless disabled in server settings
+          'lastrevid':  last revision ID
+          'length':     page size
+          'new':        defined (and empty) iff the page has only one revision
+          'ns':         namespace
+          'pageid':     page ID
+          'redirect':   defined (and empty) iff the page is a redirect
+          'revisions':  source code of latest revision (in
+                        result['revisions'][0]['*'])
+          'title':      title
+          'touched':    page_touched property: timestamp that is updated
+                        whenever the page must be re-rendered, e.g. due to
+                        editing of the page itself or a linked template
+          'missing':    Denotes that the page does not exist (or has been
+                        deleted). Most other fields are missing if this one is
+                        present, only 'title' and 'ns' are there.
 
         See http://www.mediawiki.org/wiki/API:Properties for more information.
         This method queries info, revisions and categories.
