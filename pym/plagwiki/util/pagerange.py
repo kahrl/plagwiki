@@ -124,7 +124,6 @@ class PageRange(object):
     format_number = staticmethod(format_number)
 
     def parse_number(s, how):
-        how = how.lower()
         if how == 'arabic':
             return PageRange.parse_arabic(s)
         elif how == 'roman' or how == 'Roman':
