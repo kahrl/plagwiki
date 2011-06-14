@@ -142,7 +142,7 @@ class PageRange(object):
 
     def parse_arabic(s):
         s = unicode(s)
-        if re.match('\d+', s):
+        if re.match('^\d+$', s):
             return int(s)
         else:
             raise PlagError('invalid arabic number: ' + s)
@@ -196,7 +196,7 @@ class PageRange(object):
 
     def parse_roman(s):
         s = unicode(s)
-        if re.match('[ivxlcdm]+', s, re.IGNORECASE):
+        if re.match('^[ivxlcdm]+$', s, re.IGNORECASE):
             digits = [PageRange.parse_roman_digit(x) for x in s]
             n = 0
             pos = 0
@@ -248,7 +248,7 @@ class PageRange(object):
 
     def parse_alph(s):
         s = unicode(s)
-        if re.match('[a-z]+', s, re.IGNORECASE):
+        if re.match('^[a-z]+$', s, re.IGNORECASE):
             n = 0
             for letter in s:
                 n = (n * 26) + ord(letter.lower()) - ord('a')

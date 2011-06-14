@@ -19,6 +19,23 @@ from plagwiki.loaders.wikierror import WikiError
 DEFAULT_USERAGENT = 'plagwiki/0.1a'
 
 class WikiClient(object):
+    """Manages a session with a wiki server.
+
+    Provides methods for getting text and metadata of pages, querying
+    lists of pages with a given prefix, querying the list of members
+    of a category, editing a page, uploading files, logging in and out,
+    and more.
+
+    Currently, this class supports MediaWiki servers using the API.
+    Support for the Semantic MediaWiki extension (including arbitrary
+    SMW queries) is planned for the future.
+
+    Almost all methods (except the most simplest getters) may raise
+    exception, in particular those that access the API. In case of
+    problems with the API or the wiki itself, a WikiError is raised.
+
+    """
+
     ### Constructor and support for 'with' statements ###
 
     def __init__(self, api):
@@ -31,7 +48,7 @@ class WikiClient(object):
         for logging in (see login() for that), for querying site information
         (see request_siteinfo() for that), nor for requesting tokens (see
         request_edittoken() for that). Note that these operations, apart
-        from logging in, are performed automatically as soon as an operation
+        from logging in, are performed automatically as soon as any method
         requires them.
 
         """
@@ -50,11 +67,16 @@ class WikiClient(object):
         self.clear_cached_info()
 
     def __enter__(self):
-        """Called when entering a with statement."""
+        """Called when entering a with statement.
+
+        This returns self, so you can say:
+            with WikiClient('http://.../api.php') as c:
+                do something with c
+        """
         return self
 
     def __exit__(self, type, value, traceback):
-        """Called when exiting a with statement."""
+        """Called when exiting a with statement. This calls the logout() method."""
         self.logout()
 
     ### Configuration ###
@@ -64,9 +86,10 @@ class WikiClient(object):
         return self._api
 
     def enable_semantic_mediawiki(self, ask):
-        """Enable Semantic MediaWiki queries. SMW queries are disabled
-        by default. (Enabling them has no real effect at the moment, as
-        SMW queries are not implemented.)
+        """Enable Semantic MediaWiki queries.
+        
+        SMW queries are disabled by default. (Enabling them has no real
+        effect at the moment, as SMW queries are not implemented.)
 
         ask must be the full URL to Special:Ask (possibly localized).
         For example, set ask to
@@ -80,7 +103,7 @@ class WikiClient(object):
         return self._ask is not None
 
     def get_ask_url(self):
-        """Return the URL to Special:Ask, or None is Semantic MediaWiki
+        """Return the URL to Special:Ask, or None if Semantic MediaWiki
         queries have not been enabled."""
         return self._ask
 
@@ -96,7 +119,7 @@ class WikiClient(object):
     ### Login and logout ###
 
     def login(self, username, password):
-        """Log into the API with a MediaWiki account.
+        """Log into the API with a wiki account.
 
         username and password are used as credentials. Beware that the
         password is transmitted in plain text if HTTPS is not employed.
@@ -118,7 +141,7 @@ class WikiClient(object):
                 raise LookupError()
             prelogin_token = r_prelogin['login']['token']
         except(LookupError,TypeError):
-            raise WikiError('MediaWiki pre-login request failed (expected' +
+            raise WikiError('wiki pre-login request failed (expected' +
                     ' NeedToken), here is the full response: ' +
                     "\n" + pprint.pformat(r_prelogin))
         r_login = self._query_api(action='login',
@@ -264,11 +287,11 @@ class WikiClient(object):
     ### Query methods ###
 
     def get_page_info(self, title):
-        """Return info about a single wiki page.
+        """Return information about a single wiki page.
 
         title is the requested page name.
 
-        If the given page exists, returns a dict with the following items:
+        Returns a dict with the following items:
           'counter':   number of views, unless disabled in server settings
           'lastrevid': last revision ID
           'length':    page size
@@ -297,7 +320,7 @@ class WikiClient(object):
             return None
 
     def get_page_info_by_id(self, pageid):
-        """Return info about a single wiki page.
+        """Return information about a single wiki page.
 
         pageid is the page ID of the requested page. See the documentation
         for get_page_info() for a description of the result format.
@@ -355,7 +378,7 @@ class WikiClient(object):
                 result = [x for x in result if 'redirects' in x]
             else:
                 result = [x for x in result if 'redirects' not in x]
-        return sorted(result, key=lambda x: self.natsort_key(x['title']))
+        return sorted(result, key=lambda x: self._natsort_key(x['title']))
 
     def get_multi_page_info_by_id(self, pageids, redirects=None):
         """Same as get_page_info_by_id(), but supports multiple page IDs.
@@ -379,7 +402,7 @@ class WikiClient(object):
                 result = [x for x in result if 'redirects' in x]
             else:
                 result = [x for x in result if 'redirects' not in x]
-        return sorted(result, key=lambda x: self.natsort_key(x['title']))
+        return sorted(result, key=lambda x: self._natsort_key(x['title']))
 
     def get_prefix_list(self, prefix, redirects=None, namespace=None):
         """Return a list of titles of pages with a given prefix.
@@ -404,7 +427,7 @@ class WikiClient(object):
         """
         self.request_siteinfo()
         api_result = self._query_prefix_list(prefix, redirects, namespace)
-        return sorted(self.natsort_key(page['title'])
+        return sorted(self._natsort_key(page['title'])
                 for page in api_result['query']['allpages'])
 
     def get_prefix_list_ids(self, prefix, redirects=None, namespace=None):
@@ -449,7 +472,7 @@ class WikiClient(object):
         """
         self.request_siteinfo()
         api_result = self._query_category_members(categpry, namespace)
-        return sorted(self.natsort_key(page['title'])
+        return sorted(self._natsort_key(page['title'])
                 for page in api_result['query']['categorymembers'])
 
     def get_category_members_ids(self, category, namespace=None):
@@ -489,6 +512,19 @@ class WikiClient(object):
     ### Editing and uploading ###
 
     def edit(self, title, text, summary=None, minor=True, bot=True):
+        """Edits or creates a wiki page.
+
+        title is the title of the page to be modified.
+        text is the new text.
+        summary is the edit summary.
+        minor sets the minor flag; by default, it is enabled.
+        bot sets the bot flag; by default, it is enabled.
+
+        You should always log in (preferably using a bot account) before
+        editing wiki pages. Particularly if doing automated edits, state
+        the name of purpose of the bot in the edit summary.
+
+        """
         self.request_edittoken()
         text = unicode(text)
         md5 = hashlib.md5(self._to_utf8(text)).hexdigest()
@@ -505,6 +541,25 @@ class WikiClient(object):
                     "\n" + pprint.pformat(r_edit))
 
     def upload(self, local_filename, remote_filename=None, text=None, summary=None):
+        """Uploads a media file to the wiki.
+
+        local_filename is the absolute or relative path to the local file.
+
+        remote_filename is the name that should be used after uploading.
+        If it is none, the basename of local_filename is used. The file
+        may already exist, in which case it is replaced by the new upload.
+
+        text is the text that should appear on the file page on the wiki.
+        License information should appear here, if applicable.
+
+        summary is the upload summary.
+
+        You may have to log in before uploading files. Remember that the
+        list of acceptable file types is limited and depends on the wiki
+        configuration. Particularly if doing automated upload, state
+        the name of purpose of the bot in the upload summary.
+
+        """
         self.request_edittoken()
         if remote_filename is None:
             remote_filename = os.path.basename(local_filename)
@@ -519,6 +574,92 @@ class WikiClient(object):
             raise WikiError('MediaWiki upload request failed,' +
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_upload))
+
+    ### Name and namespace helper methods ###
+
+    def normalize_name(self, name):
+        """Normalize a wiki page name."""
+        nsnumber, rest = self.split_name(name)
+        return self.combine_name(nsnumber, rest)
+
+    def combine_name(self, ns, rest):
+        """Concatenate a namespace name (or number) and rest of page name.
+
+        First this method normalizes the namespace name (using
+        normalize_namespace()) and the rest (replacing underscores with
+        spaces and converting the first letter to uppercase).
+        Then both parts are joined with a colon as a separator.
+        The article namespace (ns=0) is properly supported.
+
+        """
+        # TODO: normalize special page names?
+        nsname = self.normalize_namespace(ns)
+        rest = rest.replace('_', ' ')
+        rest = rest[0:1].upper() + rest[1:]  # capitalize only first
+        if nsname:
+            return nsname + ':' + rest
+        else:
+            return rest
+
+    def split_name(self, name):
+        """Split a page name into namespace and rest of page name.
+
+        Returns a 2-tuple. The first element is the namespace number.
+        The second element is the rest of the page name (unmodified).
+
+        If the passed name contains no colon or the part before the
+        colon is not a known namespace name, the namespace is assumed
+        to be 0, aka the main namespace.
+
+        """
+        parts = name.split(':', 1)
+        assert len(parts) >= 1
+        assert len(parts) <= 2
+        if len(parts) == 2:
+            nsnumber = self.namespace_to_number(parts[0], False)
+            if nsnumber is not None:
+                return (nsnumber, parts[1])
+        return (0, name)  # article namespace
+
+    def normalize_namespace(self, ns):
+        """Normalize the namespace name or number ns.
+
+        Converts ns to a namespace number, then returns the localized
+        canonical name for the namespace.
+
+        """
+        self.request_siteinfo()
+        nsnumber = self.namespace_to_number(ns)
+        try:
+            return self._siteinfo_ns_normalized[nsnumber]
+        except(LookupError):
+            raise WikiError('No such namespace: ' + unicode(ns))
+
+    def namespace_to_number(self, ns, raise_on_error=True):
+        """Convert the namespace name or number ns to a namespace number.
+
+        ns may be a canonical (English), localized, generic or alias name.
+        It may also be a namespace number (of type int, *not* in
+        string form), in which case this method checks if the given
+        namespace number exists.
+
+        If the namespace exists, returns the namespace number.
+        Otherwise, if raise_on_error is True, raises a WikiError.
+        Otherwise, returns None.
+
+        """
+        self.request_siteinfo()
+        if ns in self._siteinfo_ns:  # also handles numeric ns arguments
+            return self._siteinfo_ns[ns]
+        else:
+            # assume ns is a string and normalize it
+            ns_normalized = unicode(ns).lower().replace('_', ' ')
+            if ns_normalized in self._siteinfo_ns:
+                return self._siteinfo_ns[ns_normalized]
+            elif raise_on_error:
+                raise WikiError('No such namespace: ' + unicode(ns))
+            else:
+                return None
 
     ### Internal methods (low-level query methods) ###
 
@@ -543,13 +684,11 @@ class WikiClient(object):
         Returns the API result. This method automatically resumes the query
         if the result limit is exceeded.
 
-        Precondition: request_siteinfo() must have been called before.
-
         """
         if namespace is None:
-            nsnumber, prefix = self._split_name(prefix)
+            nsnumber, prefix = self.split_name(prefix)
         else:
-            nsnumber = self._namespace_to_number(namespace)
+            nsnumber = self.namespace_to_number(namespace)
         kw = {'action':'query', 'list':'allpages',
                 'aplimit':'max', 'apprefix':prefix, 'apnamespace':nsnumber}
         if redirects is not None:
@@ -596,14 +735,14 @@ class WikiClient(object):
         Precondition: request_siteinfo() must have been called before.
 
         """
-        nsnumber, rest = self._split_name(category)
+        nsnumber, rest = self.split_name(category)
         if nsnumber == 0:  # happens if namespace is omitted
-            nsnumber = self._namespace_to_number('Category')
-        category = self._combine_name(nsnumber, rest)
+            nsnumber = self.namespace_to_number('Category')
+        category = self.combine_name(nsnumber, rest)
         kw = {'action':'query', 'list':'categorymembers',
                 'cmlimit':'max', 'cmtitle':category, 'cmprop':'ids|title'}
         if namespace is not None:
-            kw['cmnamespace'] = self._namespace_to_number(namespace)
+            kw['cmnamespace'] = self.namespace_to_number(namespace)
         if with_sortkey:
             kw['cmprop'] += '|sortkey'
         if with_timestamp:
@@ -682,54 +821,6 @@ class WikiClient(object):
                     ' here is the full response: ' +
                     "\n" + pprint.pformat(r_query))
         return r_total
-
-    ### Name and namespace helper methods ###
-
-    def _normalize_name(self, name):
-        nsnumber, rest = self._split_name(name)
-        return self._combine_name(nsnumber, rest)
-
-    def _combine_name(self, nsnumber, rest):
-        # TODO: normalize special page names?
-        nsname = self._normalize_namespace(nsnumber)
-        rest = rest.replace('_', ' ')
-        rest = rest[0:1].upper() + rest[1:]  # capitalize only first
-        if nsname:
-            return nsname + ':' + rest
-        else:
-            return rest
-
-    def _split_name(self, name):
-        parts = name.split(':', 1)
-        assert len(parts) >= 1
-        assert len(parts) <= 2
-        if len(parts) == 2:
-            nsnumber = self._namespace_to_number(parts[0], False)
-            if nsnumber is not None:
-                return (nsnumber, parts[1])
-        return (0, name)  # article namespace
-
-    def _normalize_namespace(self, ns):
-        assert self.has_siteinfo()
-        nsnumber = self._namespace_to_number(ns)
-        try:
-            return self._siteinfo_ns_normalized[nsnumber]
-        except(LookupError):
-            raise WikiError('No such namespace: ' + unicode(ns))
-
-    def _namespace_to_number(self, ns, raise_on_error=True):
-        assert self.has_siteinfo()
-        if ns in self._siteinfo_ns:  # also handles numeric ns arguments
-            return self._siteinfo_ns[ns]
-        else:
-            # assume ns is a string and normalize it
-            ns_normalized = unicode(ns).lower().replace('_', ' ')
-            if ns_normalized in self._siteinfo_ns:
-                return self._siteinfo_ns[ns_normalized]
-            elif raise_on_error:
-                raise WikiError('No such namespace: ' + unicode(ns))
-            else:
-                return None
 
     ### Internal methods (direct MediaWiki API access) ###
 
@@ -876,13 +967,13 @@ class WikiClient(object):
     #   http://code.activestate.com/recipes/285264-natural-string-sorting/
     # By Seo Sanghyeon.  Some changes by Connelly Barnes & Spondon Saha
 
-    def try_int(self, s):
+    def _try_int(self, s):
         """Convert to integer if possible."""
         try:
             return int(s)
         except:
             return s
 
-    def natsort_key(self, s):
+    def _natsort_key(self, s):
         """Computes a key for natural string sorting."""
-        return map(self.try_int, re.findall(r'(\d+|\D+)', s))
+        return map(self._try_int, re.findall(r'(\d+|\D+)', s))
