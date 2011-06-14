@@ -250,23 +250,21 @@ class WikiClient(object):
             nsnumber, prefix = self._split_name(prefix)
         else:
             nsnumber = self._namespace_to_number(namespace)
-        kw = {'action':'query', 'prop':'', 'generator':'allpages',
-                'gaplimit':'max', 'gapprefix':prefix, 'gapnamespace':nsnumber}
+        kw = {'action':'query', 'list':'allpages',
+                'aplimit':'max', 'apprefix':prefix, 'apnamespace':nsnumber}
         if redirects is not None:
             if redirects:
-                kw['gapfilterredir'] = 'redirects'
+                kw['apfilterredir'] = 'redirects'
             else:
-                kw['gapfilterredir'] = 'nonredirects'
+                kw['apfilterredir'] = 'nonredirects'
         r_query = self._query_api(**kw)
         try:
-            # Note that r_query['query'] may be absent if the result
-            # is an empty set. In contrast, r_query['limits']['allpages']
-            # is always there (as long as gaplimit=max is used).
+            # Continue query if result is incomplete.
             while 'query-continue' in r_query:
-                kw['gapfrom'] = r_query['query-continue']['allpages']['gapfrom']
+                kw['apfrom'] = r_query['query-continue']['allpages']['apfrom']
                 r_query2 = self._query_api(**kw)
                 r_query = self._merge_recursive(r_query, r_query2)
-            if r_query['limits']['allpages'] is None:
+            if r_query['query']['allpages'] is None:
                 raise LookupError()
             return r_query
         except(LookupError,TypeError):
@@ -274,11 +272,65 @@ class WikiClient(object):
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_query))
 
+    def _query_category_members(self, category, namespace=None, with_sortkey=False, with_timestamp=False):
+        """Query a list of pages in the given category.
+
+        category is the name of the category, with or without the
+        'Category:' namespace prefix.
+
+        namespace defines which namespaces are searched. The default is None,
+        which means that the results are not limited by namespace. Otherwise,
+        namespace may a namespace number or a namespace name (custom and
+        localized names are allowed, as well as namespace aliases), and
+        specifies which namespace the results should be limited to.
+
+        If with_sortkey is set to True, the results include the sort key
+        of each category member.
+
+        If with_timestamp is set to True, the time and date articles were
+        added to the category are included in the results.
+
+        Returns the API result. This method automatically resumes the query
+        if the result limit is exceeded.
+
+        Precondition: request_siteinfo() must have been called before.
+
+        """
+        nsnumber, rest = self._split_name(category)
+        if nsnumber == 0:  # happens if namespace is omitted
+            nsnumber = self._namespace_to_number('Category')
+        category = self._combine_name(nsnumber, rest)
+        kw = {'action':'query', 'list':'categorymembers',
+                'cmlimit':'max', 'cmtitle':category, 'cmprop':'ids|title'}
+        if namespace is not None:
+            kw['cmnamespace'] = self._namespace_to_number(namespace)
+        if with_sortkey:
+            kw['cmprop'] += '|sortkey'
+        if with_timestamp:
+            kw['cmprop'] += '|timestamp'
+
+        r_query = self._query_api(**kw)
+        try:
+            while 'query-continue' in r_query:
+                kw['cmcontinue'] = r_query['query-continue']['categorymembers']['cmcontinue']
+                r_query2 = self._query_api(**kw)
+                r_query = self._merge_recursive(r_query, r_query2)
+            if r_query['query']['categorymembers'] is None:
+                raise LookupError()
+            return r_query
+        except(LookupError,TypeError):
+            raise WikiError('MediaWiki categorymembers query failed,' +
+                ' here is the full response: ' +
+                "\n" + pprint.pformat(r_query))
+
     ### Name and namespace helper methods ###
 
     def _normalize_name(self, name):
-        # TODO: normalize special page names?
         nsnumber, rest = self._split_name(name)
+        return self._combine_name(nsnumber, rest)
+
+    def _combine_name(self, nsnumber, rest):
+        # TODO: normalize special page names?
         nsname = self._normalize_namespace(nsnumber)
         rest = rest.replace('_', ' ')
         rest = rest[0:1].upper() + rest[1:]  # capitalize only first
