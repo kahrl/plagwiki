@@ -323,6 +323,58 @@ class WikiClient(object):
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_query))
 
+    def _query_entries(self, ids_or_titles, using_titles):
+        """Retrieve page data given a list of page IDs or page titles.
+
+        ids_or_titles is a sequence of integers or strings, depending on
+        the value of using_titles.
+
+        If using_titles is True, ids_or_titles must be a sequence of strings
+        that are interpreted as page titles. If using_titles is False,
+        ids_or_titles must be a sequence of integers that are interpreted
+        as page IDs.
+
+        Returns the API result. This method automatically resumes the query
+        if the result limit is exceeded.
+
+        """
+        chunk_size = 50
+        r_total = {}
+        for chunk_pos in range(0, len(ids_or_titles), chunk_size):
+            chunk = ids_or_titles[chunk_pos : chunk_pos + chunk_size]
+            chunk_piped = '|'.join(unicode(x) for x in chunk)
+            kw = {'action':'query', 'prop':'info|revisions|categories',
+                    'rvprop':'content', 'cllimit':'300'}
+            if using_titles:
+                kw['titles'] = chunk_piped
+            else:
+                kw['pageids'] = chunk_piped
+            r_query = self._query_api(**kw)
+            try:
+                while 'query-continue' in r_query:
+                    kw['clcontinue'] = r_query['query-continue']['categories']['clcontinue']
+                    r_query2 = self._query_api(**kw)
+                    r_query = self._merge_recursive(r_query, r_query2)
+                if r_query['query']['pages'] is None:
+                    raise LookupError()
+                # Hacky fix for a minor problem.
+                # If we had to repeat the query to get all categories,
+                # _merge_recursive concatenated the revisions list for each
+                # page (so we get the same result repeated n times, where n
+                # is the number of queries we had to do). _merge_recursive's
+                # concatenating behavior is good, since it allows us to
+                # combine the category lists from multiple queries. But it
+                # causes the stated problem with the revisions field.
+                for page in r_query['query']['pages'].values():
+                    page['revisions'] = page['revisions'][0:1]
+                # Combine all query results into a total result.
+                r_total = self._merge_recursive(r_total, r_query)
+            except(LookupError,TypeError):
+                raise WikiError('MediaWiki pages query failed,' +
+                    ' here is the full response: ' +
+                    "\n" + pprint.pformat(r_query))
+        return r_total
+
     ### Name and namespace helper methods ###
 
     def _normalize_name(self, name):
