@@ -1,1 +1,1 @@
-__all__ = ["plagwikiinfo"]
+__all__ = ["plaginfo", "plagwikiinfo"]

@@ -4,6 +4,7 @@
 # ease eventual Python 3 transition
 from __future__ import division, print_function, unicode_literals
 
+import codecs
 import ConfigParser
 from plagwiki.util.plagerror import PlagError
 
@@ -69,8 +70,9 @@ class PlagWikiInfo(object):
 
     def all_from_file(filename, verify=True):
         config_parser = ConfigParser.SafeConfigParser()
-        # use readfp instead of read as the latter silently ignores I/O errors
-        with open(filename) as fp:
+        # use readfp instead of read as the latter silently ignores I/O errors,
+        # also readfp allows us to specify utf-8
+        with codecs.open(filename, 'r', 'utf8') as fp:
             config_parser.readfp(fp)
         return PlagWikiInfo.all_from_config(config_parser, verify)
     all_from_file = staticmethod(all_from_file)

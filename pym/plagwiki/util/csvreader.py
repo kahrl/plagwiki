@@ -37,10 +37,10 @@ def csv_to_list(text, separators = ",;"):
             pos = ws_end + 1
         else:
             if last_line and not was_separator:
-                raise PlagError("Syntax error in CSV data, separator expected near: " + text[ws_end:ws_end+10].lstrip())
+                raise PlagError("Syntax error in CSV data, separator expected near: " + text[ws_end:ws_end+42].lstrip())
             lex_match = lex_pattern.match(text, ws_end)
             if lex_match is None:
-                raise PlagError("Syntax error in CSV data near: " + text[ws_end:ws_end+10].lstrip())
+                raise PlagError("Syntax error in CSV data near: " + text[ws_end:ws_end+42].lstrip())
             lex_start = lex_match.start()
             lex_end = lex_match.end()
             if text[lex_start] == '"' and text[lex_end-1] == '"' and lex_end >= lex_start + 2:

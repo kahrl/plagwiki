@@ -11,6 +11,7 @@ from plagwiki.util.plagerror import PlagError
 
 class PageRange(object):
     def parse(s):
+        print("parsing page range: "+s)
         s = unicode(s)
         parts = s.split('-')
         if len(parts) == 1:
@@ -28,12 +29,14 @@ class PageRange(object):
             self.last = 0
         else:
             # find longest common prefix
+            max_prefix = min(len(min_label), len(max_label)) - 1
             prefix_len = 0
-            while min_label[prefix_len] == max_label[prefix_len]:
+            while prefix_len < max_prefix and min_label[prefix_len] == max_label[prefix_len]:
                 prefix_len += 1
             # find longest common suffix
+            max_suffix = min(len(min_label), len(max_label)) - prefix_len - 1
             suffix_len = 0
-            while min_label[-1-suffix_len] == max_label[-1-suffix_len]:
+            while suffix_len < max_suffix and min_label[-1-suffix_len] == max_label[-1-suffix_len]:
                 suffix_len += 1
             # initialize object
             self.prefix = min_label[:prefix_len]
