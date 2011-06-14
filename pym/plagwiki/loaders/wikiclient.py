@@ -10,6 +10,7 @@ import json
 import os
 import pprint
 import pycurl
+import re
 import sys
 
 from plagwiki.loaders.wikierror import WikiError
@@ -21,6 +22,19 @@ class WikiClient(object):
     ### Constructor and support for 'with' statements ###
 
     def __init__(self, api):
+        """Constructor.
+
+        api must be a fully qualified URL to the MediaWiki API.
+        For example, api = 'http://de.guttenplag.wikia.com/api.php'.
+
+        The constructor does not communicate with the API, neither
+        for logging in (see login() for that), for querying site information
+        (see request_siteinfo() for that), nor for requesting tokens (see
+        request_edittoken() for that). Note that these operations, apart
+        from logging in, are performed automatically as soon as an operation
+        requires them.
+
+        """
         self._api = api
         self._ask = None
         self._curl = pycurl.Curl()
@@ -36,35 +50,65 @@ class WikiClient(object):
         self.clear_cached_info()
 
     def __enter__(self):
+        """Called when entering a with statement."""
         return self
 
     def __exit__(self, type, value, traceback):
+        """Called when exiting a with statement."""
         self.logout()
 
     ### Configuration ###
 
     def get_api_url(self):
+        """Return the URL to api.php."""
         return self._api
 
     def enable_semantic_mediawiki(self, ask):
+        """Enable Semantic MediaWiki queries. SMW queries are disabled
+        by default. (Enabling them has no real effect at the moment, as
+        SMW queries are not implemented.)
+
+        ask must be the full URL to Special:Ask (possibly localized).
+        For example, set ask to
+        'http://de.guttenplag.wikia.com/wiki/Spezial:Semantische_Suche'.
+
+        """
         self._ask = ask
 
     def has_semantic_mediawiki(self):
+        """Return true if Semantic MediaWiki queries have been enabled."""
         return self._ask is not None
 
     def get_ask_url(self):
+        """Return the URL to Special:Ask, or None is Semantic MediaWiki
+        queries have not been enabled."""
         return self._ask
 
     def get_user_agent(self):
+        """Return the user agent string."""
         return self._useragent
 
     def set_user_agent(self, user_agent):
+        """Change the user agent string."""
         self._useragent = unicode(user_agent)
         self._curl.setopt(pycurl.USERAGENT, self._to_utf8(self._useragent))
 
     ### Login and logout ###
 
     def login(self, username, password):
+        """Log into the API with a MediaWiki account.
+
+        username and password are used as credentials. Beware that the
+        password is transmitted in plain text if HTTPS is not employed.
+
+        Logging in is only required for certain features such as editing
+        protected pages, deleting pages or blocking users. (All of these
+        only work if the account has sufficient permissions, of course.)
+        You also have to log in to change user settings or watchlist.
+        Finally, depending on the wiki configuration, logging in may
+        increase or remove the API limits and thereby increase throughput.
+
+        """
         r_prelogin = self._query_api(action='login',
                 lgname=username, lgpassword=password)
         try:
@@ -94,8 +138,14 @@ class WikiClient(object):
         self._logged_in = True
         self.clear_cached_info()
 
-    def logout(self):
-        if self._logged_in:
+    def logout(self, force=False):
+        """Log out of the API. This does nothing if not logged in.
+
+        Set force to True to send a log out request even if the client
+        thinks it is already logged out.
+
+        """
+        if self._logged_in or force:
             try:
                 self._query_api(action='logout')
             except(WikiError) as err:
@@ -107,11 +157,27 @@ class WikiClient(object):
                 self.clear_cached_info()
 
     def is_logged_in(self):
+        """Return True if the client thinks it is logged in.
+
+        This may erroneously return True in case the login session
+        has been idle for a while and timed out by the server.
+        TODO: write a method that asks meta=userinfo if we're still logged in.
+
+        """
         return self._logged_in
 
     ### Initialization ###
 
     def request_siteinfo(self):
+        """Request site information (e.g. main page, namespaces).
+
+        This is used by other methods to do their methody stuff.
+        They call this method when required, so there is normally no
+        need to call this method explicitly.
+
+        Returns None, but see get_siteinfo().
+
+        """
         if not self.has_siteinfo():
             r_siteinfo = self._query_api(action='query', meta='siteinfo',
                     siprop='general|namespaces|namespacealiases')
@@ -145,16 +211,30 @@ class WikiClient(object):
                     "\n" + pprint.pformat(r_siteinfo))
 
     def has_siteinfo(self):
+        """Return True if request_siteinfo() has been successfully run."""
         return bool(self._siteinfo)
 
     def get_siteinfo(self):
+        """Return the site information if request_siteinfo() has been
+        successfully run, or None otherwise.
+
+        """
         return self._siteinfo
 
     def request_edittoken(self):
+        """Request an edit token (which is used for editing or uploading).
+
+        The edit and upload methods automatically call this method if
+        required, so there is normally no need to call this method explicitly.
+
+        Returns None, but see get_edittoken().
+
+        """
         if not self.has_edittoken():
-            self.request_siteinfo
+            self.request_siteinfo()
+            mainpage = self._siteinfo['general']['mainpage']
             r_edittoken = self._query_api(action='query', prop='info',
-                    intoken='edit', titles='DummyEditTokenPage')
+                    intoken='edit', titles=mainpage)
             try:
                 self._edittoken = unicode(
                         r_edittoken['query']['pages'].values()[0]['edittoken'])
@@ -164,24 +244,244 @@ class WikiClient(object):
                     "\n" + pprint.pformat(r_edittoken))
 
     def has_edittoken(self):
+        """Return True if request_edittoken() has been successfully run."""
         return bool(self._edittoken)
 
     def get_edittoken(self):
+        """Return the edit token if request_edittoken() has been
+        successfully run, or None otherwise.
+
+        """
         return self._edittoken
 
     def clear_cached_info(self):
+        """Clear the site information and the edit token."""
         self._siteinfo = None
         self._siteinfo_ns = None
         self._siteinfo_ns_normalized = None
         self._edittoken = None
 
+    ### Query methods ###
+
+    def get_page_info(self, title):
+        """Return info about a single wiki page.
+
+        title is the requested page name.
+
+        If the given page exists, returns a dict with the following items:
+          'counter':   number of views, unless disabled in server settings
+          'lastrevid': last revision ID
+          'length':    page size
+          'new':       defined (and empty) iff the page has only one revision
+          'ns':        namespace
+          'pageid':    page ID
+          'redirect':  defined (and empty) iff the page is a redirect
+          'revisions': source code of latest revision (in
+                       result['revisions'][0]['*'])
+          'title':     title
+          'touched':   page_touched property: timestamp that is updated
+                       whenever the page must be re-rendered, e.g. due to
+                       editing of the page itself or a linked template
+          'missing':   Denotes that the page does not exist (or has been
+                       deleted). Most other fields are missing if this one is
+                       present, only 'title' and 'ns' are there.
+
+        See http://www.mediawiki.org/wiki/API:Properties for more information.
+        This method queries info, revisions and categories.
+
+        """
+        api_result = self._query_entries((title,), True, ('info', 'revisions', 'categories'))
+        try:
+            return api_result['query']['pages'].values()[0]
+        except(LookupError):
+            return None
+
+    def get_page_info_by_id(self, pageid):
+        """Return info about a single wiki page.
+
+        pageid is the page ID of the requested page. See the documentation
+        for get_page_info() for a description of the result format.
+
+        """
+        api_result = self._query_entries((pageid,), False, ('info', 'revisions', 'categories'))
+        try:
+            return api_result['query']['pages'].values()[0]
+        except(LookupError):
+            return None
+
+    def get_page_text(self, title):
+        """Return the raw wikitext of a single wiki page.
+
+        title is the requested page name.
+
+        """
+        api_result = self._query_entries((title,), True, ('revisions',))
+        try:
+            return api_result['query']['pages'].values()[0]['revisions'][0]['*']
+        except(LookupError):
+            return None
+
+    def get_page_text_by_id(self, pageid):
+        """Return the raw wikitext of a single wiki page.
+
+        pageid is the page ID of the requested page.
+
+        """
+        api_result = self._query_entries((pageid,), False, ('revisions',))
+        try:
+            return api_result['query']['pages'].values()[0]['revisions'][0]['*']
+        except(LookupError):
+            return None
+
+    def get_multi_page_info(self, titles, redirects=None):
+        """Same as get_page_info(), but supports multiple titles.
+
+        titles is the list of requested page names.
+
+        redirects may be None, False or True. If redirects is None, the
+        query returns both redirects and non-redirects. If redirects is
+        False, the query returns only non-redirects. If redirects is True,
+        only redirects are returned. The default is None.
+
+        Returns a list of dicts, each of these dicts being in the same
+        format as the return value of get_page_info(). The results are
+        sorted alphabetically by title.
+
+        """
+        api_result = self._query_entries(titles, True, ('info', 'revisions', 'categories'))
+        result = api_result['query']['pages'].values()
+        if redirects is not None:
+            if redirects:
+                result = [x for x in result if 'redirects' in x]
+            else:
+                result = [x for x in result if 'redirects' not in x]
+        return sorted(result, key=lambda x: self.natsort_key(x['title']))
+
+    def get_multi_page_info_by_id(self, pageids, redirects=None):
+        """Same as get_page_info_by_id(), but supports multiple page IDs.
+
+        pageids is the list of requested page IDs.
+
+        redirects may be None, False or True. If redirects is None, the
+        query returns both redirects and non-redirects. If redirects is
+        False, the query returns only non-redirects. If redirects is True,
+        only redirects are returned. The default is None.
+
+        Returns a list of dicts, each of these dicts being in the same
+        format as the return value of get_page_info(). The results are
+        sorted alphabetically by title.
+
+        """
+        api_result = self._query_entries(pageids, False, ('info', 'revisions', 'categories'))
+        result = api_result['query']['pages'].values()
+        if redirects is not None:
+            if redirects:
+                result = [x for x in result if 'redirects' in x]
+            else:
+                result = [x for x in result if 'redirects' not in x]
+        return sorted(result, key=lambda x: self.natsort_key(x['title']))
+
+    def get_prefix_list(self, prefix, redirects=None, namespace=None):
+        """Return a list of titles of pages with a given prefix.
+
+        prefix is the prefix of the page names that are to be searched.
+        Depending on how the namespace parameter is set, it includes the
+        namespace prefix, or it doesn't (see below).
+
+        redirects may be None, False or True. If redirects is None, the
+        query returns both redirects and non-redirects. If redirects is
+        False, the query returns only non-redirects. If redirects is True,
+        only redirects are returned. The default is None.
+
+        namespace defines which namespace is searched. The default is None,
+        which means the namespace is inferred from the prefix parameter.
+        Otherwise, the prefix parameter should not include a namespace prefix
+        and namespace may a namespace number or a namespace name (custom and
+        localized names are allowed, as well as namespace aliases).
+
+        The returned list is sorted alphabetically.
+
+        """
+        self.request_siteinfo()
+        api_result = self._query_prefix_list(prefix, redirects, namespace)
+        return sorted(self.natsort_key(page['title'])
+                for page in api_result['query']['allpages'])
+
+    def get_prefix_list_ids(self, prefix, redirects=None, namespace=None):
+        """Return a list of page IDs of pages with a given prefix.
+
+        prefix is the prefix of the page names that are to be searched.
+        Depending on how the namespace parameter is set, it includes the
+        namespace prefix, or it doesn't (see below).
+
+        redirects may be None, False or True. If redirects is None, the
+        query returns both redirects and non-redirects. If redirects is
+        False, the query returns only non-redirects. If redirects is True,
+        only redirects are returned. The default is None.
+
+        namespace defines which namespace is searched. The default is None,
+        which means the namespace is inferred from the prefix parameter.
+        Otherwise, the prefix parameter should not include a namespace prefix
+        and namespace may a namespace number or a namespace name (custom and
+        localized names are allowed, as well as namespace aliases).
+
+        The returned list is sorted numerically.
+
+        """
+        self.request_siteinfo()
+        api_result = self._query_prefix_list(prefix, redirects, namespace)
+        return sorted(int(page['pageid']) for page in api_result['query']['allpages'])
+
+    def get_category_members(self, category, namespace=None):
+        """Return a list of titles of pages in the given category.
+
+        category is the name of the category, with or without the
+        'Category:' namespace prefix.
+
+        namespace defines which namespaces are searched. The default is None,
+        which means that the results are not limited by namespace. Otherwise,
+        namespace may a namespace number or a namespace name (custom and
+        localized names are allowed, as well as namespace aliases), and
+        specifies which namespace the results should be limited to.
+
+        The returned list is sorted alphabetically.
+
+        """
+        self.request_siteinfo()
+        api_result = self._query_category_members(categpry, namespace)
+        return sorted(self.natsort_key(page['title'])
+                for page in api_result['query']['categorymembers'])
+
+    def get_category_members_ids(self, category, namespace=None):
+        """Return a list of page IDs of pages in the given category.
+
+        category is the name of the category, with or without the
+        'Category:' namespace prefix.
+
+        namespace defines which namespaces are searched. The default is None,
+        which means that the results are not limited by namespace. Otherwise,
+        namespace may a namespace number or a namespace name (custom and
+        localized names are allowed, as well as namespace aliases), and
+        specifies which namespace the results should be limited to.
+
+        The returned list is sorted numerically.
+
+        """
+        self.request_siteinfo()
+        api_result = self._query_category_members(categpry, namespace)
+        return sorted(int(page['pageid']) for page in api_result['query']['categorymembers'])
+
     ### Purging wiki pages ###
 
     def purge(self, title):
+        """Requests that a page is deleted from the server-side article cache
+        and rebuilt."""
         r_purge = self._query_api(action='purge', titles=title)
         # TODO verify success
 
     def purge_multi(self, titles):
+        """Requests that multiple pages are deleted from the server-side
+        article cache and rebuilt."""
         titles_joined = '|'.join(titles)
         r_purge = self._query_api(action='purge', titles=titles_joined)
         # TODO verify success
@@ -225,9 +525,9 @@ class WikiClient(object):
     def _query_prefix_list(self, prefix, redirects=None, namespace=None):
         """Query a list of pages with a given prefix.
 
-        prefix is the prefix of the page names that are searched. It includes
-        or excludes the namespace, depending on how the namespace parameter
-        is set (see below).
+        prefix is the prefix of the page names that are to be searched.
+        Depending on how the namespace parameter is set, it includes the
+        namespace prefix, or it doesn't (see below).
 
         redirects may be None, False or True. If redirects is None, the
         query returns both redirects and non-redirects. If redirects is
@@ -323,7 +623,7 @@ class WikiClient(object):
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_query))
 
-    def _query_entries(self, ids_or_titles, using_titles):
+    def _query_entries(self, ids_or_titles, using_titles, prop):
         """Retrieve page data given a list of page IDs or page titles.
 
         ids_or_titles is a sequence of integers or strings, depending on
@@ -334,8 +634,12 @@ class WikiClient(object):
         ids_or_titles must be a sequence of integers that are interpreted
         as page IDs.
 
-        Returns the API result. This method automatically resumes the query
-        if the result limit is exceeded.
+        prop is the list of properties to get (as a python list).
+        The only property for which automatic continuation of the query
+        is supported is "categories". If prop includes 'revisions',
+        rvprop=content is automatically set.
+
+        Returns the API result.
 
         """
         chunk_size = 50
@@ -343,8 +647,11 @@ class WikiClient(object):
         for chunk_pos in range(0, len(ids_or_titles), chunk_size):
             chunk = ids_or_titles[chunk_pos : chunk_pos + chunk_size]
             chunk_piped = '|'.join(unicode(x) for x in chunk)
-            kw = {'action':'query', 'prop':'info|revisions|categories',
-                    'rvprop':'content', 'cllimit':'300'}
+            kw = {'action':'query', 'prop':('|'.join(prop))}
+            if 'revisions' in prop:
+                kw['rvprop'] = 'content'
+            if 'categories' in prop:
+                kw['cllimit'] = 'max'
             if using_titles:
                 kw['titles'] = chunk_piped
             else:
@@ -366,7 +673,8 @@ class WikiClient(object):
                 # combine the category lists from multiple queries. But it
                 # causes the stated problem with the revisions field.
                 for page in r_query['query']['pages'].values():
-                    page['revisions'] = page['revisions'][0:1]
+                    if 'missing' not in page:
+                        page['revisions'] = page['revisions'][0:1]
                 # Combine all query results into a total result.
                 r_total = self._merge_recursive(r_total, r_query)
             except(LookupError,TypeError):
@@ -563,3 +871,18 @@ class WikiClient(object):
             return r1+r2
         else:
             return r2
+
+    # The following two methods are snipped from the eighth comment in
+    #   http://code.activestate.com/recipes/285264-natural-string-sorting/
+    # By Seo Sanghyeon.  Some changes by Connelly Barnes & Spondon Saha
+
+    def try_int(self, s):
+        """Convert to integer if possible."""
+        try:
+            return int(s)
+        except:
+            return s
+
+    def natsort_key(self, s):
+        """Computes a key for natural string sorting."""
+        return map(self.try_int, re.findall(r'(\d+|\D+)', s))
