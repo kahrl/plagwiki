@@ -18,9 +18,9 @@ from plagwiki.loaders.wikierror import WikiError
 DEFAULT_USERAGENT = 'plagwiki/0.1a'
 
 class WikiClient(object):
-    def __init__(self, api, ask):
+    def __init__(self, api):
         self._api = api
-        self._ask = ask
+        self._ask = None
         self._curl = pycurl.Curl()
         self._curl.setopt(pycurl.VERBOSE, 0)
         self._curl.setopt(pycurl.HEADER, 0)
@@ -33,8 +33,23 @@ class WikiClient(object):
         self._edittoken = ''
         self._logged_in = False
 
-    def __del__(self):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
         self.logout()
+
+    def get_api_url(self):
+        return self._api
+
+    def enable_semantic_mediawiki(self, ask):
+        self._ask = ask
+
+    def has_semantic_mediawiki(self):
+        return self._ask is not None
+
+    def get_ask_url(self):
+        return self._ask
 
     def get_user_agent(self):
         return self._useragent

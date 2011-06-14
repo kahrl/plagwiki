@@ -11,7 +11,6 @@ from plagwiki.util.plagerror import PlagError
 
 class PageRange(object):
     def parse(s):
-        print("parsing page range: "+s)
         s = unicode(s)
         parts = s.split('-')
         if len(parts) == 1:

@@ -1,4 +1,4 @@
-# Leave username blank to disable logging in.
+# Leave username blank (or comment out) to disable logging in.
 
 [GuttenPlag]
 username =
