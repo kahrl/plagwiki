@@ -92,9 +92,9 @@ class Config(object):
 
     def create_plag_client(self, name, login=True):
         plaginfo = self.get_plag(name)
-        return self.create_wiki_client(plaginfo.wiki)
+        return self.create_wiki_client(plaginfo.wiki, login)
 
-    def login_plag_client(self, name, login=True):
+    def login_plag_client(self, name):
         plaginfo = self.get_plag(name)
         self.login_wiki_client(plaginfo.wiki)
 

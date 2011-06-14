@@ -18,6 +18,8 @@ from plagwiki.loaders.wikierror import WikiError
 DEFAULT_USERAGENT = 'plagwiki/0.1a'
 
 class WikiClient(object):
+    ### Constructor and support for 'with' statements ###
+
     def __init__(self, api):
         self._api = api
         self._ask = None
@@ -30,14 +32,16 @@ class WikiClient(object):
         self._curl.setopt(pycurl.USERAGENT, self._to_utf8(DEFAULT_USERAGENT))
         self._curl.setopt(pycurl.COOKIEFILE, self._to_utf8(''))
         self._useragent = DEFAULT_USERAGENT
-        self._edittoken = ''
         self._logged_in = False
+        self.clear_cached_info()
 
     def __enter__(self):
         return self
 
     def __exit__(self, type, value, traceback):
         self.logout()
+
+    ### Configuration ###
 
     def get_api_url(self):
         return self._api
@@ -58,6 +62,8 @@ class WikiClient(object):
         self._useragent = unicode(user_agent)
         self._curl.setopt(pycurl.USERAGENT, self._to_utf8(self._useragent))
 
+    ### Login and logout ###
+
     def login(self, username, password):
         r_prelogin = self._query_api(action='login',
                 lgname=username, lgpassword=password)
@@ -77,6 +83,8 @@ class WikiClient(object):
         try:
             if r_login['login']['result'] == 'WrongPass':
                 raise WikiError('Login failed, wrong password!')
+            if r_login['login']['result'] == 'WrongPluginPass':
+                raise WikiError('Login failed, wrong password!')
             if r_login['login']['result'] != 'Success':
                 raise LookupError()
         except(LookupError,TypeError):
@@ -84,7 +92,7 @@ class WikiClient(object):
                     ' here is the full response: ' +
                     "\n" + pprint.pformat(r_login))
         self._logged_in = True
-        self._edittoken = ''
+        self.clear_cached_info()
 
     def logout(self):
         if self._logged_in:
@@ -96,22 +104,55 @@ class WikiClient(object):
                         file=sys.stderr)
             else:
                 self._logged_in = False
-                self._edittoken = ''
+                self.clear_cached_info()
 
     def is_logged_in(self):
         return self._logged_in
 
-    def purge(self, title):
-        r_purge = self._query_api(action='purge', titles=title)
-        # TODO verify success
+    ### Initialization ###
 
-    def purge_multi(self, titles):
-        titles_joined = '|'.join(titles)
-        r_purge = self._query_api(action='purge', titles=titles_joined)
-        # TODO verify success
+    def request_siteinfo(self):
+        if not self.has_siteinfo():
+            r_siteinfo = self._query_api(action='query', meta='siteinfo',
+                    siprop='general|namespaces|namespacealiases')
+            try:
+                if not r_siteinfo['query']['general']:
+                    raise LookupError()
+                if not r_siteinfo['query']['namespaces']:
+                    raise LookupError()
+                if not r_siteinfo['query']['namespacealiases']:
+                    raise LookupError()
+                self._siteinfo = r_siteinfo['query']
+                # Get list of namespaces and namespace aliases
+                self._siteinfo_ns = {}
+                self._siteinfo_ns_normalized = {}
+                for ns in self._siteinfo['namespaces'].values():
+                    ns_id = int(ns['id'])
+                    self._siteinfo_ns[int(ns_id)] = int(ns_id)
+                    self._siteinfo_ns[ns['*'].lower()] = int(ns_id)
+                    if 'canonical' in ns:
+                        self._siteinfo_ns[ns['canonical'].lower()] = int(ns_id)
+                    self._siteinfo_ns_normalized[ns_id] = ns['*']
+                for ns in self._siteinfo['namespacealiases']:
+                    ns_id = int(ns['id'])
+                    self._siteinfo_ns[ns['*'].lower()] = ns_id
+                    if not ns_id in self._siteinfo_ns_normalized:
+                        # should not happen
+                        self._siteinfo_ns_normalized[ns_id] = ns['*']
+            except(LookupError,TypeError):
+                raise WikiError('MediaWiki siteinfo request failed,' +
+                    ' here is the full response: ' +
+                    "\n" + pprint.pformat(r_siteinfo))
+
+    def has_siteinfo(self):
+        return bool(self._siteinfo)
+
+    def get_siteinfo(self):
+        return self._siteinfo
 
     def request_edittoken(self):
         if not self.has_edittoken():
+            self.request_siteinfo
             r_edittoken = self._query_api(action='query', prop='info',
                     intoken='edit', titles='DummyEditTokenPage')
             try:
@@ -123,7 +164,29 @@ class WikiClient(object):
                     "\n" + pprint.pformat(r_edittoken))
 
     def has_edittoken(self):
-        return self._edittoken != ''
+        return bool(self._edittoken)
+
+    def get_edittoken(self):
+        return self._edittoken
+
+    def clear_cached_info(self):
+        self._siteinfo = None
+        self._siteinfo_ns = None
+        self._siteinfo_ns_normalized = None
+        self._edittoken = None
+
+    ### Purging wiki pages ###
+
+    def purge(self, title):
+        r_purge = self._query_api(action='purge', titles=title)
+        # TODO verify success
+
+    def purge_multi(self, titles):
+        titles_joined = '|'.join(titles)
+        r_purge = self._query_api(action='purge', titles=titles_joined)
+        # TODO verify success
+
+    ### Editing and uploading ###
 
     def edit(self, title, text, summary=None, minor=True, bot=True):
         self.request_edittoken()
@@ -156,6 +219,107 @@ class WikiClient(object):
             raise WikiError('MediaWiki upload request failed,' +
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_upload))
+
+    ### Internal methods (low-level query methods) ###
+
+    def _query_prefix_list(self, prefix, redirects=None, namespace=None):
+        """Query a list of pages with a given prefix.
+
+        prefix is the prefix of the page names that are searched. It includes
+        or excludes the namespace, depending on how the namespace parameter
+        is set (see below).
+
+        redirects may be None, False or True. If redirects is None, the
+        query returns both redirects and non-redirects. If redirects is
+        False, the query returns only non-redirects. If redirects is True,
+        only redirects are returned. The default is None.
+
+        namespace defines which namespace is searched. The default is None,
+        which means the namespace is inferred from the prefix parameter.
+        Otherwise, the prefix parameter should not include a namespace prefix
+        and namespace may a namespace number or a namespace name (custom and
+        localized names are allowed, as well as namespace aliases).
+
+        Returns the API result. This method automatically resumes the query
+        if the result limit is exceeded.
+
+        Precondition: request_siteinfo() must have been called before.
+
+        """
+        if namespace is None:
+            nsnumber, prefix = self._split_name(prefix)
+        else:
+            nsnumber = self._namespace_to_number(namespace)
+        kw = {'action':'query', 'prop':'', 'generator':'allpages',
+                'gaplimit':'max', 'gapprefix':prefix, 'gapnamespace':nsnumber}
+        if redirects is not None:
+            if redirects:
+                kw['gapfilterredir'] = 'redirects'
+            else:
+                kw['gapfilterredir'] = 'nonredirects'
+        r_query = self._query_api(**kw)
+        try:
+            # Note that r_query['query'] may be absent if the result
+            # is an empty set. In contrast, r_query['limits']['allpages']
+            # is always there (as long as gaplimit=max is used).
+            while 'query-continue' in r_query:
+                kw['gapfrom'] = r_query['query-continue']['allpages']['gapfrom']
+                r_query2 = self._query_api(**kw)
+                r_query = self._merge_recursive(r_query, r_query2)
+            if r_query['limits']['allpages'] is None:
+                raise LookupError()
+            return r_query
+        except(LookupError,TypeError):
+            raise WikiError('MediaWiki prefix query failed,' +
+                ' here is the full response: ' +
+                "\n" + pprint.pformat(r_query))
+
+    ### Name and namespace helper methods ###
+
+    def _normalize_name(self, name):
+        # TODO: normalize special page names?
+        nsnumber, rest = self._split_name(name)
+        nsname = self._normalize_namespace(nsnumber)
+        rest = rest.replace('_', ' ')
+        rest = rest[0:1].upper() + rest[1:]  # capitalize only first
+        if nsname:
+            return nsname + ':' + rest
+        else:
+            return rest
+
+    def _split_name(self, name):
+        parts = name.split(':', 1)
+        assert len(parts) >= 1
+        assert len(parts) <= 2
+        if len(parts) == 2:
+            nsnumber = self._namespace_to_number(parts[0], False)
+            if nsnumber is not None:
+                return (nsnumber, parts[1])
+        return (0, name)  # article namespace
+
+    def _normalize_namespace(self, ns):
+        assert self.has_siteinfo()
+        nsnumber = self._namespace_to_number(ns)
+        try:
+            return self._siteinfo_ns_normalized[nsnumber]
+        except(LookupError):
+            raise WikiError('No such namespace: ' + unicode(ns))
+
+    def _namespace_to_number(self, ns, raise_on_error=True):
+        assert self.has_siteinfo()
+        if ns in self._siteinfo_ns:  # also handles numeric ns arguments
+            return self._siteinfo_ns[ns]
+        else:
+            # assume ns is a string and normalize it
+            ns_normalized = unicode(ns).lower().replace('_', ' ')
+            if ns_normalized in self._siteinfo_ns:
+                return self._siteinfo_ns[ns_normalized]
+            elif raise_on_error:
+                raise WikiError('No such namespace: ' + unicode(ns))
+            else:
+                return None
+
+    ### Internal methods (direct MediaWiki API access) ###
 
     def _query_api(self, **kw):
         """Perform a raw MediaWiki API request.
@@ -197,6 +361,10 @@ class WikiClient(object):
         # This method does not support pycurl.FORM_FILENAME.
         # Note that pycurl currently (May 2011) doesn't support unicode.
         kw['format'] = 'json'
+        if __debug__:
+            print("Request:")
+            pprint.pprint(kw)
+            print()
         form = []
         for argname in sorted(kw):
             argvalue = kw[argname]
@@ -247,12 +415,18 @@ class WikiClient(object):
 
         response_uni = buffer.getvalue().decode('utf-8')
         try:
+            if __debug__:
+                print("Result:")
+                pprint.pprint(json.loads(response_uni))
+                print()
             return json.loads(response_uni)
         except(ValueError) as err:
             raise WikiError('Error while accessing ' + self._api + ': ' +
                              unicode(err) + "\n\n" +
                              "Response was:\n" +
                              self._truncate_text(response_uni, 500))
+
+    ### Utilities ###
 
     def _to_utf8(self, value):
         return unicode(value).encode('utf-8')
@@ -265,3 +439,23 @@ class WikiClient(object):
         else:
             return text[0:(limit-3)] + '...'
 
+    def _merge_recursive(self, r1, r2, toplevel=True):
+        if isinstance(r1, dict) and isinstance(r2, dict):
+            r = {}
+            for key in r1:
+                # special case query-continue in the topmost level:
+                # it is always dropped from r1
+                if not toplevel or key != 'query-continue':
+                    r[key] = r1[key]
+            for key in r2:
+                if key in r:
+                    r[key] = self._merge_recursive(r[key], r2[key], False)
+                else:
+                    r[key] = r2[key]
+            return r
+        elif isinstance(r1, tuple) and isinstance(r2, tuple):
+            return r1+r2
+        elif isinstance(r1, list) and isinstance(r2, list):
+            return r1+r2
+        else:
+            return r2
