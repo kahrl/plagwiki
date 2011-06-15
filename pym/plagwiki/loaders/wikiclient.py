@@ -380,7 +380,7 @@ class WikiClient(object):
                 result = [x for x in result if 'redirects' in x]
             else:
                 result = [x for x in result if 'redirects' not in x]
-        return sorted(result, key=lambda x: self._natsort_key(x['title']))
+        return self._natsorted_by_title(result)
 
     def get_multi_page_info_by_id(self, pageids, redirects=None):
         """Same as get_page_info_by_id(), but supports multiple page IDs.
@@ -404,7 +404,7 @@ class WikiClient(object):
                 result = [x for x in result if 'redirects' in x]
             else:
                 result = [x for x in result if 'redirects' not in x]
-        return sorted(result, key=lambda x: self._natsort_key(x['title']))
+        return self._natsorted_by_title(result)
 
     def get_prefix_list(self, prefix, redirects=None, namespace=None):
         """Return a list of titles of pages with a given prefix.
@@ -429,8 +429,8 @@ class WikiClient(object):
         """
         self.request_siteinfo()
         api_result = self._query_prefix_list(prefix, redirects, namespace)
-        return sorted(self._natsort_key(page['title'])
-                for page in api_result['query']['allpages'])
+        result = [page['title'] for page in api_result['query']['allpages']]
+        return self._natsorted(result)
 
     def get_prefix_list_ids(self, prefix, redirects=None, namespace=None):
         """Return a list of page IDs of pages with a given prefix.
@@ -473,9 +473,9 @@ class WikiClient(object):
 
         """
         self.request_siteinfo()
-        api_result = self._query_category_members(categpry, namespace)
-        return sorted(self._natsort_key(page['title'])
-                for page in api_result['query']['categorymembers'])
+        api_result = self._query_category_members(category, namespace)
+        result = [page['title'] for page in api_result['query']['categorymembers']]
+        return self._natsorted(result)
 
     def get_category_members_ids(self, category, namespace=None):
         """Return a list of page IDs of pages in the given category.
@@ -493,8 +493,63 @@ class WikiClient(object):
 
         """
         self.request_siteinfo()
-        api_result = self._query_category_members(categpry, namespace)
+        api_result = self._query_category_members(category, namespace)
         return sorted(int(page['pageid']) for page in api_result['query']['categorymembers'])
+
+    def get_all_categories(self, prefix=None):
+        """Return a list of all categories.
+
+        To be precise, this actually returns all categories that are
+        non-empty or have been at least once in the past. Therefore, an
+        empty category whose description page exists is not guaranteed to
+        be listed. On the other hand, a "wanted" category, that is, a
+        non-empty category with a missing description page will be listed.
+
+        Optionally, prefix limits the search to only the specified prefix.
+        The given prefix may, but does not have to include the 'Category:'
+        namespace prefix. If prefix is None (the default), category
+        names are not limited.
+
+        The returned list is a list of strings (without the 'Category:'
+        namespace prefix), sorted alphabetically.
+
+        """
+        self.request_siteinfo()
+        api_result = self._query_all_categories(prefix)
+        result = [page['*'] for page in api_result['query']['allcategories']]
+        return self._natsorted(result)
+
+    def get_all_categories_info(self, prefix=None):
+        """Return a list of all categories, with additional info.
+
+        Like get_all_categories(), this returns all categories that are
+        non-empty or have been at least once in the past. (See there
+        for a few notes.)  However, using the additional info given by
+        this method, you can for instance filter out categories that are
+        currently empty.
+
+        The prefix parameter works identical to the prefix parameter
+        in get_all_categories().
+
+        Returns a list of dicts (sorted by title),
+        each consisting of the following fields:
+          'categoryinfo': a dict with the following fields:
+                          'size':    sum of pages, files and subcats
+                          'pages':   number of pages in this category
+                          'files':   number of files in this category
+                          'subcats': number of subcategories in this category
+          'ns':           number of the category namespace
+          'pageid':       page ID of the description page
+          'title':        title of the category, including namespace prefix
+          'missing':      Denotes that the description page does not exist (or
+                          has been deleted). The 'pageid' field is missing if
+                          this one is present.
+
+        """
+        self.request_siteinfo()
+        api_result = self._query_all_categories_info(prefix)
+        result = api_result['query']['pages'].values()
+        return self._natsorted_by_title(result)
 
     ### Purging wiki pages ###
 
@@ -738,7 +793,8 @@ class WikiClient(object):
 
         """
         nsnumber, rest = self.split_name(category)
-        if nsnumber == 0:  # happens if namespace is omitted
+        if nsnumber == self.namespace_to_number(''):
+            # namespace prefix was omitted, prepend Category:
             nsnumber = self.namespace_to_number('Category')
         category = self.combine_name(nsnumber, rest)
         kw = {'action':'query', 'list':'categorymembers',
@@ -761,6 +817,79 @@ class WikiClient(object):
             return r_query
         except(LookupError,TypeError):
             raise WikiError('MediaWiki categorymembers query failed,' +
+                ' here is the full response: ' +
+                "\n" + pprint.pformat(r_query))
+
+    def _query_all_categories(self, prefix=None):
+        """Query all categories.
+
+        prefix is an optional title prefix, with or without the
+        'Category:' namespace prefix.
+
+        The exact criteria for a category to be included in the result
+        are documented at get_all_categories().
+
+        Returns the API result. This method automatically resumes the query
+        if the result limit is exceeded. This method performs a list
+        query (as opposed to a generator query).
+
+        Precondition: request_siteinfo() must have been called before.
+
+        """
+        kw = {'action':'query', 'list':'allcategories', 'aclimit':'max'}
+        if prefix:
+            nsnumber, rest = self.split_name(prefix)
+            if nsnumber != self.namespace_to_number('') and nsnumber != self.namespace_to_number('Category'):
+                raise WikiError('AllCategories prefix is in incorrect namespace')
+            kw['acprefix'] = rest
+        r_query = self._query_api(**kw)
+        try:
+            while 'query-continue' in r_query:
+                kw['acfrom'] = r_query['query-continue']['allcategories']['acfrom']
+                r_query2 = self._query_api(**kw)
+                r_query = self._merge_recursive(r_query, r_query2)
+            if r_query['query']['allcategories'] is None:
+                raise LookupError()
+            return r_query
+        except(LookupError,TypeError):
+            raise WikiError('MediaWiki allcategories query failed,' +
+                ' here is the full response: ' +
+                "\n" + pprint.pformat(r_query))
+
+    def _query_all_categories_info(self, prefix=None):
+        """Query all categories with info.
+
+        prefix is an optional title prefix, with or without the
+        'Category:' namespace prefix.
+
+        The exact criteria for a category to be included in the result
+        are documented at get_all_categories().
+
+        Returns the API result. This method automatically resumes the query
+        if the result limit is exceeded. This method performs a generator
+        query (as opposed to a list query).
+
+        Precondition: request_siteinfo() must have been called before.
+
+        """
+        kw = {'action':'query', 'generator':'allcategories',
+                'gaclimit':'max', 'prop':'categoryinfo'}
+        if prefix:
+            nsnumber, rest = self.split_name(prefix)
+            if nsnumber != self.namespace_to_number('') and nsnumber != self.namespace_to_number('Category'):
+                raise WikiError('AllCategories prefix is in incorrect namespace')
+            kw['acprefix'] = rest
+        r_query = self._query_api(**kw)
+        try:
+            while 'query-continue' in r_query:
+                kw['gacfrom'] = r_query['query-continue']['allcategories']['gacfrom']
+                r_query2 = self._query_api(**kw)
+                r_query = self._merge_recursive(r_query, r_query2)
+            if r_query['query']['pages'] is None:  # FIXME is this an error?
+                raise LookupError()
+            return r_query
+        except(LookupError,TypeError):
+            raise WikiError('MediaWiki allcategories query failed,' +
                 ' here is the full response: ' +
                 "\n" + pprint.pformat(r_query))
 
@@ -979,3 +1108,9 @@ class WikiClient(object):
     def _natsort_key(self, s):
         """Computes a key for natural string sorting."""
         return map(self._try_int, re.findall(r'(\d+|\D+)', s))
+
+    def _natsorted(self, l):
+        return sorted(l, key=self._natsort_key)
+
+    def _natsorted_by_title(self, l):
+        return sorted(l, key=lambda x: self._natsort_key(x['title']))
