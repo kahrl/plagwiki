@@ -1,1 +1,1 @@
-__all__ = ["wikiclient", "wikierror"]
+__all__ = ["emergencyerror", "wikiclient", "wikierror"]

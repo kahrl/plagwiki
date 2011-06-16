@@ -89,6 +89,7 @@ class Config(object):
             userinfo = self.get_user(name)
             if userinfo.username and userinfo.password:
                 client.login(userinfo.username, userinfo.password)
+            client.set_emergency_page(userinfo.emergencypage, userinfo.emergencyvar)
 
     def create_plag_client(self, name, login=True):
         plaginfo = self.get_plag(name)

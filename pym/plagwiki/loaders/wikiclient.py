@@ -13,6 +13,7 @@ import pycurl
 import re
 import sys
 
+from plagwiki.loaders.emergencyerror import EmergencyError
 from plagwiki.loaders.wikierror import WikiError
 
 
@@ -64,6 +65,8 @@ class WikiClient(object):
         self._curl.setopt(pycurl.COOKIEFILE, self._to_utf8(''))
         self._useragent = DEFAULT_USERAGENT
         self._logged_in = False
+        self._emergencypage = None
+        self._emergencyvar = None
         self.clear_cached_info()
 
     def __enter__(self):
@@ -188,6 +191,55 @@ class WikiClient(object):
 
         """
         return self._logged_in
+
+    ### Emergency halt for bots ###
+
+    def set_emergency_page(self, page, var):
+        """Set the bot's emergency page for check_emergency().
+
+        page is the emergency page name, usually a subpage of the user page.
+        var is the name of the emergency variable.
+
+        See also check_emergency().
+
+        """
+        self._emergencypage = page
+        self._emergencyvar = var
+
+    def check_emergency(self):
+        """Download the wikitext of the defined emergency page, and raise
+        an EmergencyError if the emergency variable has been activated.
+
+        Assume that PAGE, VAR are the parameters to the most recent call to
+        set_emergency_page(). If either is None or set_emergency_page() has
+        never been called, a warning message is printed to stderr and the
+        method returns. Otherwise the wikitext of PAGE is retrieved and
+        scanned for an occurrence of <VAR>=<VALUE>. If VALUE is anything
+        else than zero an EmergencyError is raised. Note that text inside
+        <!-- comments --> is stripped before looking for the variable.
+
+        Use this facilty in automated bots and protect the emergency page
+        so that other administrators can halt your bot.
+
+        """
+        page = self._emergencypage
+        var = self._emergencyvar
+        if page is None:
+            print("Warning: Emergency page is undefined!", file=sys.stderr)
+            return
+        if var is None:
+            print("Warning: Emergency variable is undefined!", file=sys.stderr)
+            return
+        text = self.get_page_text(page)
+        if text is None:
+            raise EmergencyError('Emergency page ' + page + ' does not exist!')
+        text = re.sub('<!--.*?-->', '', text)
+        match = re.search(re.escape(var) + '\s*=\s*([0-9]+)', text)
+        if match:
+            if int(match.group(1)) != 0:
+                raise EmergencyError('Emergency halt!')
+        else:
+            raise EmergencyError('Emergency variable ' + var + ' is not defined in emergency page ' + page + '!')
 
     ### Initialization ###
 
@@ -878,7 +930,7 @@ class WikiClient(object):
             nsnumber, rest = self.split_name(prefix)
             if nsnumber != self.namespace_to_number('') and nsnumber != self.namespace_to_number('Category'):
                 raise WikiError('AllCategories prefix is in incorrect namespace')
-            kw['acprefix'] = rest
+            kw['gacprefix'] = rest
         r_query = self._query_api(**kw)
         try:
             while 'query-continue' in r_query:
@@ -1049,16 +1101,24 @@ class WikiClient(object):
 
         response_uni = buffer.getvalue().decode('utf-8')
         try:
-            if __debug__:
-                print("Result:")
-                pprint.pprint(json.loads(response_uni))
-                print()
-            return json.loads(response_uni)
+            response_parsed = json.loads(response_uni)
         except(ValueError) as err:
             raise WikiError('Error while accessing ' + self._api + ': ' +
                              unicode(err) + "\n\n" +
                              "Response was:\n" +
                              self._truncate_text(response_uni, 500))
+        if __debug__:
+            print("Result:")
+            pprint.pprint(response_parsed)
+            print()
+        if 'error' in response_parsed:
+            raise WikiError('Error while accessing ' + self._api + ': ' +
+                    response_parsed['error']['info'])
+        if 'warnings' in response_parsed:
+            all_api_warnings = [x['*'] for x in response_parsed['warnings'].values()]
+            raise WikiError('Error while accessing ' + self._api + ': ' +
+                    "\n".join(all_api_warnings))
+        return response_parsed
 
     ### Utilities ###
 

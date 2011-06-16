@@ -27,6 +27,7 @@ class PlagInfo(object):
         self.fragmentprefix = None
         self.sourcecategory = None
         self.typescategory = None
+        self.barcode = None
         self.options = None
         self.pdf = None
 
@@ -59,6 +60,8 @@ class PlagInfo(object):
             raise PlagError('Plag '+self.name+': No source category defined!')
         if not self.typescategory:
             raise PlagError('Plag '+self.name+': No types category defined!')
+        if self.barcode is None:
+            raise PlagError('Plag '+self.name+': No barcode page defined!')
         if self.options is None:
             raise PlagError('Plag '+self.name+': No options defined!')
         if self.pdf is None:
@@ -133,7 +136,6 @@ class PlagInfo(object):
 
     def _parse_options(name, text):
         options = []
-        allowed_chapter_types = ('chapter', 'section')
         for row in csv_to_list(text):
             for option in row:
                 options.append(option.lower())
@@ -171,6 +173,8 @@ class PlagInfo(object):
             info.sourcecategory = config_parser.get(section, 'sourcecategory')
         if config_parser.has_option(section, 'typescategory'):
             info.typescategory = config_parser.get(section, 'typescategory')
+        if config_parser.has_option(section, 'barcode'):
+            info.barcode = config_parser.get(section, 'barcode')
         if config_parser.has_option(section, 'options'):
             info.options = PlagInfo._parse_options(name, config_parser.get(section, 'options'))
         if config_parser.has_option(section, 'pdf'):
