@@ -603,6 +603,64 @@ class WikiClient(object):
         result = api_result['query']['pages'].values()
         return self._natsorted_by_title(result)
 
+    ### Parsing wikitext ###
+
+    def expandtemplates(self, text, title=None):
+        """Preprocesses wikitext. Expands templates, strips comments, etc.
+
+        text is the wikitext to preprocess.
+
+        title is the title of the page the text is on. This is used when the
+        page links to itself, or when links to subpages are present.
+        If set to None, defaults to 'API'.
+
+        See http://www.mediawiki.org/wiki/API:Parsing_wikitext.
+        """
+        return self._query_expandtemplates(text=text, title=title)
+
+    def expandtemplates_page(self, page):
+        """Preprocesses wikitext. Expands templates, strips comments, etc.
+
+        page is the title of the page to preprocess.
+
+        See http://www.mediawiki.org/wiki/API:Parsing_wikitext.
+        """
+        return self._query_expandtemplates(page=page)
+
+    def parse(self, text, title=None, prop=None):
+        """Parses wikitext.
+
+        text is the wikitext to parse.
+
+        title is the title of the page the text is on. This is used when the
+        page links to itself, or when links to subpages are present.
+        If set to None, defaults to 'API'.
+
+        prop is the list of properties to get. If set to None, equivalent
+        to ('text', 'langlinks', 'categories', 'links', 'templates',
+        'images', 'externallinks', 'sections', 'revid').
+
+        See http://www.mediawiki.org/wiki/API:Parsing_wikitext.
+        """
+        if prop is not None:
+            prop = '|'.join(prop)
+        return self._query_parse(text=text, title=title, prop=prop)
+
+    def parse_page(self, page, prop=None):
+        """Parses wikitext.
+
+        page is the title of the page to parse.
+
+        prop is the list of properties to get. If set to None, equivalent
+        to ('text', 'langlinks', 'categories', 'links', 'templates',
+        'images', 'externallinks', 'sections', 'revid').
+
+        See http://www.mediawiki.org/wiki/API:Parsing_wikitext.
+        """
+        if prop is not None:
+            prop = '|'.join(prop)
+        return self._query_parse(page=page, prop=prop)
+
     ### Purging wiki pages ###
 
     def purge(self, title):
@@ -769,6 +827,18 @@ class WikiClient(object):
                 raise WikiError('No such namespace: ' + unicode(ns))
             else:
                 return None
+
+    def get_article_path(self, title):
+        """Returns the path to the given article page (URL without
+        protocol scheme, server and port)."""
+        self.request_siteinfo()
+        title = self.normalize_name(title)
+        return self._siteinfo['general']['articlepath'].replace('$1', title)
+
+    def get_article_url(self, title):
+        """Returns the URL to the given article page."""
+        self.request_siteinfo()
+        return self._siteinfo['general']['server'] + self.get_article_path(title)
 
     ### Internal methods (low-level query methods) ###
 
@@ -1004,6 +1074,32 @@ class WikiClient(object):
                     ' here is the full response: ' +
                     "\n" + pprint.pformat(r_query))
         return r_total
+
+    def _query_expandtemplates(self, **kw):
+        kw['action'] = 'expandtemplates'
+        if 'page' in kw and kw['page'] is not None:
+            # the 'page' parameter is not supported by action=expandtemplates;
+            # fake it
+            api_result = self._query_entries((kw['page'],), True, ('revisions',))
+            try:
+                kw['text'] = api_result['query']['pages'].values()[0]['revisions'][0]['*']
+                kw['title'] = kw['page']
+                del kw['page']
+            except(LookupError):
+                raise WikiError('The page you specified does not exist.')
+        api_result = self._query_api(**kw)
+        try:
+            return api_result['expandtemplates']['*']
+        except(LookupError):
+            raise WikiError('MediaWiki expandtemplates query returned no data.')
+
+    def _query_parse(self, **kw):
+        kw['action'] = 'parse'
+        api_result = self._query_api(**kw)
+        try:
+            return api_result['parse']
+        except(LookupError):
+            raise WikiError('MediaWiki parse query returned no data.')
 
     ### Internal methods (direct MediaWiki API access) ###
 
