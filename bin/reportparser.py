@@ -463,7 +463,8 @@ class HTMLToLaTeX(object):
 
 
 config = Config(os.path.dirname(os.path.abspath(__file__)) + '/../config')
-page = 'Benutzer:Kahrl/Bericht'
+page = 'Mm/Bericht-Entwurf'
+#page = 'Benutzer:Kahrl/Bericht'
 
 with open('report.tex', 'w') as output_file:
     with config.create_wiki_client('VroniPlag', login=False) as client:

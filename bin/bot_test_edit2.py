@@ -17,11 +17,11 @@ import pprint
 config = Config(os.path.dirname(os.path.abspath(__file__)) + '/../config')
 
 try:
-    with config.create_wiki_client('VroniPlag') as client:
+    with config.create_wiki_client('GuttenPlag') as client:
         client.check_emergency()
 
         summary = 'PlagWiki-Bot - testing action=edit'
-        for page in ('User:Kahrl/Fragment',):
+        for page in ('Benutzer:Kahrl/Fragment',):
             oldtext = client.get_page_text(page)
             if oldtext is None:
                 print('Page does not exist: ' + page)
