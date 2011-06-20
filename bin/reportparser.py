@@ -19,11 +19,11 @@ import urlparse
 
 
 class HTMLStructuralParser(HTMLParser.HTMLParser):
+    EMPTY_TAGS = set(('area', 'base', 'basefont', 'br', 'col', 'frame',
+        'hr', 'img', 'input', 'isindex', 'link', 'meta', 'param'))
+
     def __init__(self):
         HTMLParser.HTMLParser.__init__(self)
-        self.__empty_tags = set(('area', 'base', 'basefont', 'br',
-                'col', 'frame', 'hr', 'img', 'input', 'isindex',
-                'link', 'meta', 'param'))
         self.reset()
 
     def reset(self):
@@ -52,17 +52,17 @@ class HTMLStructuralParser(HTMLParser.HTMLParser):
 
         # For tags like <br>, <img> etc. also call handle_endtag,
         # because HTMLParser doesn't do it for us
-        if tag in self.__empty_tags:
+        if tag in HTMLStructuralParser.EMPTY_TAGS:
             self.__handle_endtag_or_emptytag(tag)
 
     def handle_endtag(self, tag):
-        if tag in self.__empty_tags:
+        if tag in HTMLStructuralParser.EMPTY_TAGS:
             raise RuntimeError('Tag '+tag+' can\'t be closed using </'+tag+'>, use <'+tag+' /> instead')
         self.__handle_endtag_or_emptytag(tag)
 
     def handle_startendtag(self, tag, attrs):
         self.handle_starttag(tag, attrs)
-        if tag not in self.__empty_tags:
+        if tag not in HTMLStructuralParser.EMPTY_TAGS:
             self.__handle_endtag_or_emptytag(tag)
 
     def __handle_endtag_or_emptytag(self, tag):
@@ -118,11 +118,25 @@ class HTMLToLaTeX(object):
         self._citations = {}
         self._fixup_dict = None
         self._fixup_pattern = None
+        self._preprocess('', self._structure)
         if verbose:
             pprint.pprint(self._structure)
 
     def get_output(self):
         return self._output.getvalue()
+
+    TABLE_ROW_TAGS = set(('tr', 'thead', 'tfoot'))
+    TABLE_CELL_TAGS = set(('td', 'th'))
+
+    def _preprocess(self, tag, children):
+        for i in range(len(children)):
+            if isinstance(children[i], tuple):
+                assert len(children[i]) == 3
+                if tag == 'table' and children[i][0] not in HTMLToLaTeX.TABLE_ROW_TAGS and children[i][0] != 'caption':
+                    children[i] = ('tr', {}, [('td', {}, [children[i]])])
+                elif tag in HTMLToLaTeX.TABLE_ROW_TAGS and children[i][0] not in HTMLToLaTeX.TABLE_CELL_TAGS:
+                    children[i] = ('td', {}, [children[i]])
+                self._preprocess(children[i][0], children[i][2])
 
     def process(self):
         self._output.seek(0)
@@ -235,16 +249,21 @@ class HTMLToLaTeX(object):
             self._process_list(children, context)
         elif tag == 'a':
             if 'href' in attrs:
+                href = re.sub('&amp;', '&', attrs['href'])
                 if context.in_cite_ref:
                     # This links to a reference
-                    context.name_cite_ref = re.sub('^#', '', attrs['href'])
-                elif context.in_references and attrs['href'][0:1] == '#' and \
+                    context.name_cite_ref = re.sub('^#', '', href)
+                elif context.in_references and href[0:1] == '#' and \
                         children == ['\u2191']:
                     # This is a backlink from a reference
                     pass
+                elif len(children) == 1 and href == children[0]:
+                    # This is a normal link with link text == href
+                    url = urlparse.urljoin(self._baseurl, href)
+                    context.out.write('\\url{' + self._tex_fixup_url(url) + '}')
                 else:
                     # This is a normal link
-                    url = urlparse.urljoin(self._baseurl, attrs['href'])
+                    url = urlparse.urljoin(self._baseurl, href)
                     self._process_list(children, context,
                             r'\href{' + self._tex_fixup_url(url) + '}{', '}')
         elif tag == 'b' or tag == 'strong':
@@ -327,23 +346,34 @@ class HTMLToLaTeX(object):
             context2.table_xmax = 0
             context2.table_ymax = 0
             self._process_list(children, context2)
-            context.out.write(r'\begin{table}[htbp]' + '\n')
-            context.out.write(r'\centering' + '\n')
-            if context2.table_caption and not context2.table_caption_below:
-                context.out.write(r'\caption{' + context2.table_caption + '}\n')
-            context.out.write(r'\begin{tabular}{')
+            if context.table is None:
+                # outermost table
+                context.out.write(r'\begin{table}[htbp]' + '\n')
+                context.out.write(r'\centering' + '\n')
+                if context2.table_caption and not context2.table_caption_below:
+                    context.out.write(r'\caption{' + context2.table_caption + '}\n')
+                context.out.write(r'\begin{tabularx}{\linewidth}{')
+            else:
+                # nested table
+                context.out.write(r'\mbox{')
+                context.out.write(r'\begin{tabularx}{0.8\linewidth}{')
             for x in range(1, context2.table_xmax+1):
-                context.out.write('l')
+                context.out.write('X' if x == 1 else '|X')
             context.out.write('}\n')
             for y in range(1, context2.table_ymax+1):
                 for x in range(1, context2.table_xmax+1):
                     if (x,y) in context2.table:
                         context.out.write(context2.table[(x,y)])
                 context.out.write(r'\\'+'\n')
-            context.out.write(r'\end{tabular}' + '\n')
-            if context2.table_caption and context2.table_caption_below:
-                context.out.write('\\caption{' + context2.table_caption + '}\n')
-            context.out.write(r'\end{table}' + '\n')
+            context.out.write(r'\end{tabularx}' + '\n')
+            if context.table is None:
+                # outermost table
+                if context2.table_caption and context2.table_caption_below:
+                    context.out.write('\\caption{' + context2.table_caption + '}\n')
+                context.out.write(r'\end{table}' + '\n')
+            else:
+                # nested table
+                context.out.write('}')
         elif tag == 'caption':
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
@@ -352,7 +382,7 @@ class HTMLToLaTeX(object):
             self._process_list(children, context)
             context.table_caption = context.out.getvalue()
             context.table_caption_below = bool(context.table) # is it nonempty?
-        elif tag == 'tr' or tag == 'thead' or tag == 'tfoot':
+        elif tag in HTMLToLaTeX.TABLE_ROW_TAGS:
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
             context.table_rowtag = tag
@@ -360,7 +390,7 @@ class HTMLToLaTeX(object):
             context.table_y += 1
             self._process_list(children, context)
             context.table_rowtag = None
-        elif tag == 'td' or tag == 'th':
+        elif tag in HTMLToLaTeX.TABLE_CELL_TAGS:
             # TODO: use alignment from style, halign and valign
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
@@ -385,7 +415,8 @@ class HTMLToLaTeX(object):
                 main_cell_contents = '\\multirow{-' + unicode(rowspan) + '}{*}{' + main_cell_contents + '}'
                 above_cell_contents = '~'
             if is_header_cell:
-                main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{\\textbf{' + main_cell_contents + '}}'
+                # FIXME
+                main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{\\cellcolor[rgb]{1.0,0.8,0.6}\\textbf{' + main_cell_contents + '}}'
                 above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{' + above_cell_contents + '}'
             elif colspan != 1:
                 main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + main_cell_contents + '}'
@@ -459,7 +490,7 @@ class HTMLToLaTeX(object):
         return self._fixup_pattern.sub(self._fixup_repl, text)
 
     def _tex_fixup_url(self, url):
-        return re.sub('([%#])', r'\\\1', url)
+        return re.sub('([%#&])', r'\\\1', url)
 
 
 config = Config(os.path.dirname(os.path.abspath(__file__)) + '/../config')
@@ -483,8 +514,10 @@ with open('report.tex', 'w') as output_file:
 \\usepackage{graphicx}
 \\usepackage{xcolor}
 \\usepackage{pdflscape}
+\\usepackage{colortbl}
 \\usepackage{longtable}
 \\usepackage{multirow}
+\\usepackage{tabularx}
 \\usepackage{framed}
 \\usepackage{textcomp}
 \\usepackage{scrtime}
