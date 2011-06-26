@@ -103,35 +103,69 @@ class LaTeXTableGenerator(object):
         self._x = 0
         self._y = 0
 
-    def print_latex_table(self, file=sys.stdout):
+    def print_latex_table(self, width, file=sys.stdout):
         caption, caption_below = self.get_caption()
         file.write(r'\begin{table}[htbp]' + '\n')
         file.write(r'\centering' + '\n')
         if caption and not caption_below:
             file.write(r'\caption{' + self._caption + '}\n')
-        self.print_latex_tabular(file)
+        self.print_latex_tabular(width, file)
         if caption and caption_below:
             file.write('\\caption{' + self._caption + '}\n')
         file.write(r'\end{table}' + '\n')
 
-    def print_latex_tabular(self, file=sys.stdout):
+    def print_latex_tabular(self, width, file=sys.stdout):
+        # compute maximum cell indices
         if self._cells:
             xmax = max(k[0] for k in self._cells.keys())
             ymax = max(k[1] for k in self._cells.keys())
         else:
             xmax = ymax = 0
-        file.write(r'\centering' + '\n')
-        file.write(r'\begin{tabularx}{\linewidth}{')
+        if xmax == 0 or ymax == 0:
+            return
+
+        # compute column widths from constraints
+        column_widths = {}
+        self._column_width_constraints.sort(key = lambda x: len(x[0]))
+        #pprint.pprint(self._column_width_constraints)
+        for constraint_columns, constraint_width in self._column_width_constraints:
+            if not constraint_columns:
+                continue
+            constraint_cur_widths = [column_widths.get(x, None) for x in constraint_columns]
+            constraint_cur_totalwidth = sum([column_widths.get(x, 0.0) for x in constraint_columns])
+            if None in constraint_cur_widths or constraint_cur_totalwidth < constraint_width:
+                addwidth = max(0.0, (constraint_width - constraint_cur_totalwidth) / len(constraint_columns))
+                for x in constraint_columns:
+                    column_widths[x] = max(0.0, column_widths.get(x, 0.0) + addwidth)
+        if len(column_widths) != xmax:
+            addwidth = max(0.0, (1.0 - sum(column_widths.values())) / (xmax - len(column_widths)))
+            for x in range(1, xmax+1):
+                if x not in column_widths:
+                    column_widths[x] = addwidth
+        addwidth = max(0.0, (1.0 - sum(column_widths.values())) / xmax)
+        column_widths_cm = {}
         for x in range(1, xmax+1):
-            file.write('X' if x == 1 else '|X')
+            column_widths_cm[x] = max(0.1, width * (column_widths[x] + addwidth))
+        #pprint.pprint(column_widths_cm)
+
+        # start of tabular and column specifications
+        #file.write(r'\centering' + '\n')
+        file.write(r'\begin{longtable}{|')
+        for x in range(1, xmax+1):
+            #file.write(r'>{\raggedrightarraybackslash}p{' + unicode(column_widths_cm[x]) + 'cm}|')
+            file.write(r'p{' + unicode(column_widths_cm[x]) + 'cm}|')
         file.write('}\n')
+
+        # write the tabular rows
         for y in range(1, ymax+1):
             for x in range(1, xmax+1):
                 if (x,y) in self._cells:
                     file.write(self._cells[(x,y)])
             if y != ymax:
                 file.write(r'\\'+'\n')
-        file.write(r'\end{tabularx}' + '\n')
+
+        # end of tabular
+        file.write(r'\end{longtable}' + '\n')
 
     def add_caption(self, text):
         self._caption = text
@@ -165,13 +199,11 @@ class LaTeXTableGenerator(object):
         while (self._x, self._y) in self._cells:
             self._x += 1
 
+        main_cell_contents = text
+        above_cell_contents = ''
         is_header_cell = (tag == 'th' or self._rowtag == 'thead' or self._rowtag == 'tfoot')
         if is_header_cell:
-            main_cell_contents = '\\textbf{' + text + '}'
-            above_cell_contents = ''
-        else:
-            main_cell_contents = text
-            above_cell_contents = ''
+            main_cell_contents = '\\textbf{' + main_cell_contents + '}'
 
         colspan = rowspan = 1
         if 'colspan' in attrs:
@@ -193,7 +225,7 @@ class LaTeXTableGenerator(object):
             match = re.search('text-align\s*:\s*([^;]+)', attrs['style'])
             if match and match.group(1) in ('left', 'center', 'right'):
                 text_align = match.group(1)
-            match = re.search('width\s*:\s*(\d+(\.\d+))%', attrs['style'])
+            match = re.search('width\s*:\s*(\d+(\.\d+)?)%', attrs['style'])
             if match:
                 width = 0.01*float(match.group(1))
 
@@ -210,13 +242,22 @@ class LaTeXTableGenerator(object):
             effective_align = 'c'
         else:
             effective_align = 'l'
+        if self._x == 1:
+            effective_align = '|' + effective_align + '|'
+        else:
+            effective_align = effective_align + '|'
 
         if width is not None:
-            self._column_width_constraints.append(range(self._x, self._x + colspan), width)
+            self._column_width_constraints.append((range(self._x, self._x + colspan), width))
 
-        if effective_cellcolor != 'transparent' or effective_align != 'l' or colspan != 1:
-            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{\\cellcolor[rgb]{' + effective_cellcolor + '}' + main_cell_contents + '}'
-            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{\\cellcolor[rgb]{' + effective_cellcolor + '}' + above_cell_contents + '}'
+        effective_cellcolor = 'transparent'
+        if effective_cellcolor != 'transparent' or effective_align not in ('|l|', 'l|') or colspan != 1:
+            #main_cell_contents = '\\raggedright ' + main_cell_contents
+            if effective_cellcolor != 'transparent':
+                main_cell_contents = '\\cellcolor[rgb]{' + effective_cellcolor + '}' + main_cell_contents
+                above_cell_contents = '\\cellcolor[rgb]{' + effective_cellcolor + '}' + above_cell_contents
+            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{' + main_cell_contents + '}'
+            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{' + above_cell_contents + '}'
 
         for x in range(self._x, self._x + colspan):
             for y in range(self._y, self._y + rowspan):
@@ -381,7 +422,8 @@ class HTMLToLaTeX(object):
             if context.table is None:
                 context.out.write(r'\ifhmode\\\fi' + '\n')
             else:
-                context.out.write(r'\ifhmode\newline\fi' + '\n')
+                #context.out.write(r'\ifhmode\newline\fi' + '\n')
+                context.out.write(r'\newline' + '\n')
         elif tag == 'pre':
             context.out.write(r'\begin{verbatim}'+'\n')
             context2 = copy(context)
@@ -425,6 +467,14 @@ class HTMLToLaTeX(object):
         elif tag == 'u':
             # can't use r'\underline{' because \u is an escape even in raw
             self._process_list(children, context, '\\underline{', '}')
+        elif tag == 'tt':
+            self._process_list(children, context, '\\texttt{', '}')
+        elif tag == 'big':
+            self._process_list(children, context, '\\underline{', '}')
+        elif tag == 'big':
+            self._process_list(children, context, '{\\large ', '}')
+        elif tag == 'small':
+            self._process_list(children, context, '{\\small ', '}')
         elif tag == 'sup':
             if 'reference' in attrs_classes:
                 context2 = copy(context)
@@ -494,12 +544,14 @@ class HTMLToLaTeX(object):
             self._process_list(children, context2)
             if context.table is None:
                 # outermost table
-                table_generator.print_latex_table(file=context.out)
+                table_generator.print_latex_table(width=13.0, file=context.out)
             else:
                 # nested table
-                context.out.write(r'\mbox{')
-                table_generator.print_latex_tabular(file=context.out)
-                context.out.write(r'}')
+                print('OH NOES', file=sys.stderr)
+                raise RuntimeError('Somebody set up us the nested table. We are on the way to destruction. We have no chance to survive make our time.')
+                #context.out.write(r'\mbox{')
+                #table_generator.print_latex_tabular(width=12.0, file=context.out)
+                #context.out.write(r'}')
         elif tag == 'caption':
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
@@ -605,7 +657,6 @@ with open('report.tex', 'w') as output_file:
 \\usepackage{colortbl}
 \\usepackage{longtable}
 \\usepackage{multirow}
-\\usepackage{tabularx}
 \\usepackage{framed}
 \\usepackage{textcomp}
 \\usepackage{scrtime}
