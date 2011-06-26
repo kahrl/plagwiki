@@ -90,6 +90,97 @@ class HTMLStructuralParser(HTMLParser.HTMLParser):
 class OpenStruct(object):
     pass
 
+
+class LaTeXTableGenerator(object):
+    def __init__(self):
+        self._cells = dict()
+        self._rowtag = None
+        self._caption = ''
+        self._caption_below = False
+        self._x = 0
+        self._y = 0
+
+    def print_latex_table(self, file=sys.stdout):
+        file.write(r'\begin{table}[htbp]' + '\n')
+        file.write(r'\centering' + '\n')
+        if self._caption and not self._caption_below:
+            file.write(r'\caption{' + self._caption + '}\n')
+        self.print_latex_tabular(file)
+        if self._caption and self._caption_below:
+            file.write('\\caption{' + self._caption + '}\n')
+        file.write(r'\end{table}' + '\n')
+
+    def print_latex_tabular(self, file=sys.stdout):
+        if self._cells:
+            xmax = max(k[0] for k in self._cells.keys())
+            ymax = max(k[1] for k in self._cells.keys())
+        else:
+            xmax = ymax = 0
+        file.write(r'\begin{tabularx}{\linewidth}{')
+        for x in range(1, xmax+1):
+            file.write('X' if x == 1 else '|X')
+        file.write('}\n')
+        for y in range(1, ymax+1):
+            for x in range(1, xmax+1):
+                if (x,y) in self._cells:
+                    file.write(self._cells[(x,y)])
+            if y != ymax:
+                file.write(r'\\'+'\n')
+        file.write(r'\end{tabularx}' + '\n')
+
+    def add_caption(self, text):
+        self._caption = text
+        self._caption_below = bool(self._cells)  # is the table nonempty?
+
+    def start_row(self, tag):
+        assert tag in ('tr', 'thead', 'tfoot')
+        self._rowtag = tag
+        self._x = 0
+        self._y += 1
+
+    def end_row(self):
+        self._rowtag = None
+
+    def is_row_started(self):
+        return self._rowtag is not None
+
+    def add_cell(self, tag, attrs, text):
+        assert tag in ('td', 'th')
+        assert self.is_row_started()
+        # TODO: use alignment from style, halign and valign
+        self._x += 1
+        while (self._x, self._y) in self._cells:
+            self._x += 1
+        main_cell_contents = text
+        above_cell_contents = ''
+        is_header_cell = (tag == 'th' or self._rowtag == 'thead' or self._rowtag == 'tfoot')
+        colspan = rowspan = 1
+        if 'colspan' in attrs:
+            colspan = max(int(attrs['colspan']), 1)
+        if 'rowspan' in attrs:
+            rowspan = max(int(attrs['rowspan']), 1)
+        if rowspan != 1:
+            main_cell_contents = '\\multirow{-' + unicode(rowspan) + '}{*}{' + main_cell_contents + '}'
+            above_cell_contents = '~'
+        if is_header_cell:
+            # FIXME
+            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{\\cellcolor[rgb]{1.0,0.8,0.6}\\textbf{' + main_cell_contents + '}}'
+            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{' + above_cell_contents + '}'
+        elif colspan != 1:
+            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + main_cell_contents + '}'
+            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + above_cell_contents + '}'
+        for x in range(self._x, self._x + colspan):
+            for y in range(self._y, self._y + rowspan):
+                if x == self._x:
+                    cellprefix = '' if x == 1 else '& '
+                    if y == self._y + rowspan - 1:
+                        self._cells[(x, y)] = cellprefix + main_cell_contents
+                    else:
+                        self._cells[(x, y)] = cellprefix + above_cell_contents
+                else:
+                    self._cells[(x, y)] = ''
+
+
 class HTMLToLaTeX(object):
     def convert(html, baseurl, verbose):
         converter = HTMLToLaTeX(html, baseurl, verbose)
@@ -125,16 +216,13 @@ class HTMLToLaTeX(object):
     def get_output(self):
         return self._output.getvalue()
 
-    TABLE_ROW_TAGS = set(('tr', 'thead', 'tfoot'))
-    TABLE_CELL_TAGS = set(('td', 'th'))
-
     def _preprocess(self, tag, children):
         for i in range(len(children)):
             if isinstance(children[i], tuple):
                 assert len(children[i]) == 3
-                if tag == 'table' and children[i][0] not in HTMLToLaTeX.TABLE_ROW_TAGS and children[i][0] != 'caption':
+                if tag == 'table' and children[i][0] not in ('tr', 'thead', 'tfoot', 'caption'):
                     children[i] = ('tr', {}, [('td', {}, [children[i]])])
-                elif tag in HTMLToLaTeX.TABLE_ROW_TAGS and children[i][0] not in HTMLToLaTeX.TABLE_CELL_TAGS:
+                elif tag in ('tr', 'thead', 'tfoot') and children[i][0] not in ('td', 'th'):
                     children[i] = ('td', {}, [children[i]])
                 self._preprocess(children[i][0], children[i][2])
 
@@ -150,7 +238,6 @@ class HTMLToLaTeX(object):
         context.name_cite_ref = None
         context.dl_started = False
         context.table = None
-        # more context.table_xxx variables are set when <table> is processed
         self._process_list(self._structure, context)
 
     def _debug(self, message, context):
@@ -230,8 +317,7 @@ class HTMLToLaTeX(object):
             if context.table is None:
                 context.out.write(r'\ifhmode\\\fi' + '\n')
             else:
-                context.out.write(' ')
-            pass
+                context.out.write(r'\ifhmode\newline\fi' + '\n')
         elif tag == 'pre':
             context.out.write(r'\begin{verbatim}'+'\n')
             context2 = copy(context)
@@ -331,109 +417,47 @@ class HTMLToLaTeX(object):
                 context.out.write('\item ')
                 context.dl_started = True
             self._process_list(children, context)
+        elif tag == 'blockquote':
+            self._process_list(children, context,
+                    r'\begin{quote}'+'\n', r'\end{quote}'+'\n')
         elif tag == 'hr':
             context.out.write('\hrulesep{}')
-
         elif tag == 'table':
+            table_generator = LaTeXTableGenerator()
             context2 = copy(context)
             context2.out = io.StringIO()  # temp redirect to /dev/null
-            context2.table = dict()
-            context2.table_rowtag = None
-            context2.table_caption = ''
-            context2.table_caption_below = False
-            context2.table_x = 0
-            context2.table_y = 0
-            context2.table_xmax = 0
-            context2.table_ymax = 0
+            context2.table = table_generator
             self._process_list(children, context2)
             if context.table is None:
                 # outermost table
-                context.out.write(r'\begin{table}[htbp]' + '\n')
-                context.out.write(r'\centering' + '\n')
-                if context2.table_caption and not context2.table_caption_below:
-                    context.out.write(r'\caption{' + context2.table_caption + '}\n')
-                context.out.write(r'\begin{tabularx}{\linewidth}{')
+                table_generator.print_latex_table(file=context.out)
             else:
                 # nested table
                 context.out.write(r'\mbox{')
-                context.out.write(r'\begin{tabularx}{0.8\linewidth}{')
-            for x in range(1, context2.table_xmax+1):
-                context.out.write('X' if x == 1 else '|X')
-            context.out.write('}\n')
-            for y in range(1, context2.table_ymax+1):
-                for x in range(1, context2.table_xmax+1):
-                    if (x,y) in context2.table:
-                        context.out.write(context2.table[(x,y)])
-                context.out.write(r'\\'+'\n')
-            context.out.write(r'\end{tabularx}' + '\n')
-            if context.table is None:
-                # outermost table
-                if context2.table_caption and context2.table_caption_below:
-                    context.out.write('\\caption{' + context2.table_caption + '}\n')
-                context.out.write(r'\end{table}' + '\n')
-            else:
-                # nested table
-                context.out.write('}')
+                table_generator.print_latex_tabular(file=context.out)
+                context.out.write(r'}')
         elif tag == 'caption':
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
             context.out.seek(0)
             context.out.truncate()
             self._process_list(children, context)
-            context.table_caption = context.out.getvalue()
-            context.table_caption_below = bool(context.table) # is it nonempty?
-        elif tag in HTMLToLaTeX.TABLE_ROW_TAGS:
+            context.table.add_caption(context.out.getvalue())
+        elif tag in ('tr', 'thead', 'tfoot'):
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
-            context.table_rowtag = tag
-            context.table_x = 0
-            context.table_y += 1
+            context.table.start_row(tag)
             self._process_list(children, context)
-            context.table_rowtag = None
-        elif tag in HTMLToLaTeX.TABLE_CELL_TAGS:
-            # TODO: use alignment from style, halign and valign
+            context.table.end_row()
+        elif tag in ('td', 'th'):
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
-            if context.table_rowtag is None:
+            if not context.table.is_row_started():
                 raise RuntimeError(tag + ' encountered outside table row')
-            context.table_x += 1
-            while (context.table_x, context.table_y) in context.table:
-                context.table_x += 1
-            context.table_xmax = max(context.table_x, context.table_xmax)
             context.out.seek(0)
             context.out.truncate()
             self._process_list(children, context)
-            main_cell_contents = context.out.getvalue()
-            above_cell_contents = ''
-            is_header_cell = (tag == 'th' or context.table_rowtag == 'thead' or context.table_rowtag == 'tfoot')
-            colspan = rowspan = 1
-            if 'colspan' in attrs:
-                colspan = max(int(attrs['colspan']), 1)
-            if 'rowspan' in attrs:
-                rowspan = max(int(attrs['rowspan']), 1)
-            if rowspan != 1:
-                main_cell_contents = '\\multirow{-' + unicode(rowspan) + '}{*}{' + main_cell_contents + '}'
-                above_cell_contents = '~'
-            if is_header_cell:
-                # FIXME
-                main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{\\cellcolor[rgb]{1.0,0.8,0.6}\\textbf{' + main_cell_contents + '}}'
-                above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{' + above_cell_contents + '}'
-            elif colspan != 1:
-                main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + main_cell_contents + '}'
-                above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + above_cell_contents + '}'
-            for x in range(context.table_x, context.table_x + colspan):
-                for y in range(context.table_y, context.table_y + rowspan):
-                    if x == context.table_x:
-                        cellprefix = '' if x == 1 else '& '
-                        if y == context.table_y + rowspan - 1:
-                            context.table[(x, y)] = cellprefix + main_cell_contents
-                        else:
-                            context.table[(x, y)] = cellprefix + above_cell_contents
-                    else:
-                        context.table[(x, y)] = ''
-            context.table_xmax = max(context.table_xmax, context.table_x + colspan - 1)
-            context.table_ymax = max(context.table_ymax, context.table_y + rowspan - 1)
-            pprint.pprint(context.table)
+            context.table.add_cell(tag, attrs, context.out.getvalue())
         else:
             raise RuntimeError('Tag not supported: '+tag)
 
