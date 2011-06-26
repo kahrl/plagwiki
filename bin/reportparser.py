@@ -295,20 +295,27 @@ class LaTeXTableGenerator(object):
             parbox_halign_end = ''
             parbox_valign = ''
             if cell.text_align == 'left':
-                parbox_halign = r'\begin{flushleft}'
-                parbox_halign_end = r'\end{flushleft}'
+                #parbox_halign = r'\begin{flushleft}'
+                #parbox_halign_end = r'\end{flushleft}'
+                pass
             elif cell.text_align == 'center':
-                parbox_halign = '\centering{}'
+                #parbox_halign = '\centering{}'
+                pass
             else:
-                parbox_halign = r'\begin{flushright}'
-                parbox_halign_end = r'\end{flushright}'
+                #parbox_halign = r'\begin{flushright}'
+                #parbox_halign_end = r'\end{flushright}'
+                pass
             if cell.vertical_align == 'top':
                 parbox_valign = '[t]'
             elif cell.vertical_align == 'bottom':
                 parbox_valign = '[b]'
             text = parbox_halign + r'\parbox' + parbox_valign + '{' + unicode(parbox_width) + 'cm}{' + text + '}' + parbox_halign_end
+            if cell.background_rgb != None:
+                text = r'\cellcolor[rgb]{' + cell.background_rgb + '}' + text
             if cell.is_main and cell.rowspan != 1:
-                text = '\\multirow{-' + unicode(cell.rowspan) + '}{*}{' + text + '}'
+                text = r'\multirow{-' + unicode(cell.rowspan) + '}{*}{' + text + '}'
+            if cell.colspan != 1:
+                text = r'\multicolumn{' + unicode(cell.colspan) + '}{p{' + unicode(parbox_width) + 'cm}}{' + text + '}'
 
         #effective_cellcolor = 'transparent'
         #if effective_cellcolor != 'transparent' or effective_align not in ('|l|', 'l|') or colspan != 1:
@@ -681,9 +688,9 @@ class HTMLToLaTeX(object):
 
 
 config = Config(os.path.dirname(os.path.abspath(__file__)) + '/../config')
-#page = 'Mm/Bericht-Entwurf'
+page = 'Mm/Bericht-Entwurf'
 #page = 'Benutzer:Kahrl/Bericht'
-page = 'Benutzer:Kahrl/Sandbox/Table'
+#page = 'Benutzer:Kahrl/Sandbox/Table'
 
 with open('report.tex', 'w') as output_file:
     with config.create_wiki_client('VroniPlag', login=False) as client:
