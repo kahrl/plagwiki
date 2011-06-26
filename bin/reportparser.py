@@ -95,18 +95,22 @@ class LaTeXTableGenerator(object):
     def __init__(self):
         self._cells = dict()
         self._rowtag = None
+        self._column_width_constraints = []
         self._caption = ''
         self._caption_below = False
+        self._nested_caption = ''
+        self._nested_caption_below = False
         self._x = 0
         self._y = 0
 
     def print_latex_table(self, file=sys.stdout):
+        caption, caption_below = self.get_caption()
         file.write(r'\begin{table}[htbp]' + '\n')
         file.write(r'\centering' + '\n')
-        if self._caption and not self._caption_below:
+        if caption and not caption_below:
             file.write(r'\caption{' + self._caption + '}\n')
         self.print_latex_tabular(file)
-        if self._caption and self._caption_below:
+        if caption and caption_below:
             file.write('\\caption{' + self._caption + '}\n')
         file.write(r'\end{table}' + '\n')
 
@@ -116,6 +120,7 @@ class LaTeXTableGenerator(object):
             ymax = max(k[1] for k in self._cells.keys())
         else:
             xmax = ymax = 0
+        file.write(r'\centering' + '\n')
         file.write(r'\begin{tabularx}{\linewidth}{')
         for x in range(1, xmax+1):
             file.write('X' if x == 1 else '|X')
@@ -132,6 +137,15 @@ class LaTeXTableGenerator(object):
         self._caption = text
         self._caption_below = bool(self._cells)  # is the table nonempty?
 
+    def get_caption(self):
+        if self._caption:
+            return (self._caption, self._caption_below)
+        else:
+            return (self._nested_caption, self._nested_caption_below)
+
+    def add_nested_table_caption(self, nested_table):
+        self._nested_caption, self._nested_caption_below = nested_table.get_caption()
+
     def start_row(self, tag):
         assert tag in ('tr', 'thead', 'tfoot')
         self._rowtag = tag
@@ -147,13 +161,18 @@ class LaTeXTableGenerator(object):
     def add_cell(self, tag, attrs, text):
         assert tag in ('td', 'th')
         assert self.is_row_started()
-        # TODO: use alignment from style, halign and valign
         self._x += 1
         while (self._x, self._y) in self._cells:
             self._x += 1
-        main_cell_contents = text
-        above_cell_contents = ''
+
         is_header_cell = (tag == 'th' or self._rowtag == 'thead' or self._rowtag == 'tfoot')
+        if is_header_cell:
+            main_cell_contents = '\\textbf{' + text + '}'
+            above_cell_contents = ''
+        else:
+            main_cell_contents = text
+            above_cell_contents = ''
+
         colspan = rowspan = 1
         if 'colspan' in attrs:
             colspan = max(int(attrs['colspan']), 1)
@@ -162,13 +181,43 @@ class LaTeXTableGenerator(object):
         if rowspan != 1:
             main_cell_contents = '\\multirow{-' + unicode(rowspan) + '}{*}{' + main_cell_contents + '}'
             above_cell_contents = '~'
-        if is_header_cell:
-            # FIXME
-            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{\\cellcolor[rgb]{1.0,0.8,0.6}\\textbf{' + main_cell_contents + '}}'
-            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{c}{' + above_cell_contents + '}'
-        elif colspan != 1:
-            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + main_cell_contents + '}'
-            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{l}{' + above_cell_contents + '}'
+
+        # FIXME: This is a hack. A very horrible hack, indeed. But it works.
+        background_color = None
+        text_align = None
+        width = None
+        if 'style' in attrs:
+            match = re.search('background-color\s*:\s*([^;]+)', attrs['style'])
+            if match:
+                background_color = match.group(1)
+            match = re.search('text-align\s*:\s*([^;]+)', attrs['style'])
+            if match and match.group(1) in ('left', 'center', 'right'):
+                text_align = match.group(1)
+            match = re.search('width\s*:\s*(\d+(\.\d+))%', attrs['style'])
+            if match:
+                width = 0.01*float(match.group(1))
+
+        if background_color is not None:
+            effective_cellcolor = self._css_color_to_rgb(background_color)
+        elif is_header_cell:
+            effective_cellcolor = self._css_color_to_rgb('#f2f2f2')
+        else:
+            effective_cellcolor = 'transparent'
+
+        if text_align is not None:
+            effective_align = text_align[:1]
+        elif is_header_cell:
+            effective_align = 'c'
+        else:
+            effective_align = 'l'
+
+        if width is not None:
+            self._column_width_constraints.append(range(self._x, self._x + colspan), width)
+
+        if effective_cellcolor != 'transparent' or effective_align != 'l' or colspan != 1:
+            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{\\cellcolor[rgb]{' + effective_cellcolor + '}' + main_cell_contents + '}'
+            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{\\cellcolor[rgb]{' + effective_cellcolor + '}' + above_cell_contents + '}'
+
         for x in range(self._x, self._x + colspan):
             for y in range(self._y, self._y + rowspan):
                 if x == self._x:
@@ -179,6 +228,21 @@ class LaTeXTableGenerator(object):
                         self._cells[(x, y)] = cellprefix + above_cell_contents
                 else:
                     self._cells[(x, y)] = ''
+
+    def _css_color_to_rgb(self, csscolor):
+        # TODO: add support for named colors
+        if re.match('^#[0-9a-zA-Z]{6}$', csscolor):
+            r = int(csscolor[1:3], 16) / 255.0
+            g = int(csscolor[3:5], 16) / 255.0
+            b = int(csscolor[5:7], 16) / 255.0
+            return "%1.3f,%1.3f,%1.3f" % (r,g,b)
+        elif re.match('^#[0-9a-zA-Z]{3}$'):
+            r = int(csscolor[1:2], 16) / 15.0
+            g = int(csscolor[2:3], 16) / 15.0
+            b = int(csscolor[3:4], 16) / 15.0
+            return "%1.3f,%1.3f,%1.3f" % (r,g,b)
+        else:
+            return None
 
 
 class HTMLToLaTeX(object):
