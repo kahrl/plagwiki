@@ -216,7 +216,7 @@ class LaTeXTableGenerator(object):
 
     def print_latex_table(self, width, file=sys.stdout):
         caption, caption_below = self.get_caption()
-        file.write(r'\begin{table}[htbp]' + '\n')
+        file.write(r'\begin{table}[htp]' + '\n')
         file.write(r'\centering' + '\n')
         if caption and not caption_below:
             file.write(r'\caption{' + self._caption + '}\n')
