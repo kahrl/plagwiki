@@ -95,6 +95,7 @@ class LaTeXTableGenerator(object):
     def __init__(self):
         self._cells = dict()
         self._rowtag = None
+        self._rowattrs = None
         self._column_width_constraints = []
         self._caption = ''
         self._caption_below = False
@@ -102,6 +103,116 @@ class LaTeXTableGenerator(object):
         self._nested_caption_below = False
         self._x = 0
         self._y = 0
+
+    def add_caption(self, text):
+        self._caption = text
+        self._caption_below = bool(self._cells)  # is the table nonempty?
+
+    def get_caption(self):
+        if self._caption:
+            return (self._caption, self._caption_below)
+        else:
+            return (self._nested_caption, self._nested_caption_below)
+
+    def add_nested_table_caption(self, nested_table):
+        self._nested_caption, self._nested_caption_below = nested_table.get_caption()
+
+    def start_row(self, tag, attrs):
+        assert tag in ('tr', 'thead', 'tfoot')
+        self._rowtag = tag
+        self._rowattrs = attrs
+        self._x = 0
+        self._y += 1
+
+    def end_row(self):
+        self._rowtag = None
+        self._rowattrs = None
+
+    def is_row_started(self):
+        return self._rowtag is not None
+
+    def add_cell(self, tag, attrs, text):
+        assert tag in ('td', 'th')
+        assert self.is_row_started()
+        self._x += 1
+        while (self._x, self._y) in self._cells:
+            self._x += 1
+
+        is_header_cell = (tag == 'th' or self._rowtag == 'thead' or self._rowtag == 'tfoot')
+        if is_header_cell:
+            text = '\\textbf{' + text + '}'
+
+        colspan = rowspan = 1
+        if 'colspan' in attrs:
+            colspan = max(int(attrs['colspan']), 1)
+        if 'rowspan' in attrs:
+            rowspan = max(int(attrs['rowspan']), 1)
+
+        # FIXME: This is a hack. A very horrible hack, indeed. But it works.
+        background_color = None
+        text_align = None
+        vertical_align = None
+        width = None
+        all_styles = [x['style'] for x in [self._rowattrs, attrs] if 'style' in x]
+        for style in all_styles:
+            match = re.search('background-color\s*:\s*([^;]+)', style)
+            if match:
+                background_color = match.group(1)
+            match = re.search('text-align\s*:\s*([^;]+)', style)
+            if match and match.group(1) in ('left', 'center', 'right'):
+                text_align = match.group(1)
+            match = re.search('vertical-align\s*:\s*([^;]+)', style)
+            if match and match.group(1) in ('top', 'middle', 'bottom'):
+                vertical_align = match.group(1)
+            match = re.search('width\s*:\s*(\d+(\.\d+)?)%', style)
+            if match:
+                width = 0.01*float(match.group(1))
+
+        if background_color is not None:
+            background_rgb = self._css_color_to_rgb(background_color)
+        elif is_header_cell:
+            background_rgb = self._css_color_to_rgb('#f2f2f2')
+        else:
+            background_rgb = None
+
+        if text_align is None:
+            text_align = 'center' if is_header_cell else 'left'
+
+        if vertical_align is None:
+            vertical_align = 'top'
+
+        if width is not None:
+            self._column_width_constraints.append((range(self._x, self._x + colspan), width))
+
+        for x in range(self._x, self._x + colspan):
+            for y in range(self._y, self._y + rowspan):
+                cell = OpenStruct()
+                cell.text = text
+                cell.is_left = (x == self._x)
+                cell.is_bottom = (y == self._y + rowspan - 1)
+                cell.is_main = (cell.is_left and cell.is_bottom)
+                cell.colspan = colspan
+                cell.rowspan = rowspan
+                cell.background_rgb = background_rgb  # None or RGB-float string
+                cell.text_align = text_align  # left, center or right
+                cell.vertical_align = vertical_align  # top, middle or bottom
+                self._cells[(x, y)] = cell
+
+
+    def _css_color_to_rgb(self, csscolor):
+        # TODO: add support for named colors
+        if re.match('^#[0-9a-zA-Z]{6}$', csscolor):
+            r = int(csscolor[1:3], 16) / 255.0
+            g = int(csscolor[3:5], 16) / 255.0
+            b = int(csscolor[5:7], 16) / 255.0
+            return "%1.3f,%1.3f,%1.3f" % (r,g,b)
+        elif re.match('^#[0-9a-zA-Z]{3}$', csscolor):
+            r = int(csscolor[1:2], 16) / 15.0
+            g = int(csscolor[2:3], 16) / 15.0
+            b = int(csscolor[3:4], 16) / 15.0
+            return "%1.3f,%1.3f,%1.3f" % (r,g,b)
+        else:
+            return None
 
     def print_latex_table(self, width, file=sys.stdout):
         caption, caption_below = self.get_caption()
@@ -153,137 +264,73 @@ class LaTeXTableGenerator(object):
         file.write(r'\begin{longtable}{|')
         for x in range(1, xmax+1):
             #file.write(r'>{\raggedrightarraybackslash}p{' + unicode(column_widths_cm[x]) + 'cm}|')
-            file.write(r'p{' + unicode(column_widths_cm[x]) + 'cm}|')
+            file.write('p{' + unicode(column_widths_cm[x]) + 'cm}|')
+        file.write('p{0cm}')
         file.write('}\n')
+        file.write(r'\hline' + '\n')
 
         # write the tabular rows
         for y in range(1, ymax+1):
             for x in range(1, xmax+1):
-                if (x,y) in self._cells:
-                    file.write(self._cells[(x,y)])
-            if y != ymax:
-                file.write(r'\\'+'\n')
+                self._print_cell(x, y, column_widths_cm, file)
+            #if y != ymax:
+            #    print hline
+            file.write(r'\\'+'\n')
 
         # end of tabular
+        file.write(r'\hline' + '\n')
         file.write(r'\end{longtable}' + '\n')
 
-    def add_caption(self, text):
-        self._caption = text
-        self._caption_below = bool(self._cells)  # is the table nonempty?
+    def _print_cell(self, x, y, column_widths_cm, file):
+        cell = self._cells.get((x, y), None)
+        if cell is not None and cell.is_left:
+            #if x != 1:
+            #    file.write('& ')
+            if cell.is_main:
+                text = cell.text
+            else:
+                text = '~'
+            parbox_width = sum(column_widths_cm[z] for z in range(x, x+cell.colspan))
+            parbox_halign = ''
+            parbox_halign_end = ''
+            parbox_valign = ''
+            if cell.text_align == 'left':
+                parbox_halign = r'\begin{flushleft}'
+                parbox_halign_end = r'\end{flushleft}'
+            elif cell.text_align == 'center':
+                parbox_halign = '\centering{}'
+            else:
+                parbox_halign = r'\begin{flushright}'
+                parbox_halign_end = r'\end{flushright}'
+            if cell.vertical_align == 'top':
+                parbox_valign = '[t]'
+            elif cell.vertical_align == 'bottom':
+                parbox_valign = '[b]'
+            text = parbox_halign + r'\parbox' + parbox_valign + '{' + unicode(parbox_width) + 'cm}{' + text + '}' + parbox_halign_end
+            if cell.is_main and cell.rowspan != 1:
+                text = '\\multirow{-' + unicode(cell.rowspan) + '}{*}{' + text + '}'
 
-    def get_caption(self):
-        if self._caption:
-            return (self._caption, self._caption_below)
-        else:
-            return (self._nested_caption, self._nested_caption_below)
-
-    def add_nested_table_caption(self, nested_table):
-        self._nested_caption, self._nested_caption_below = nested_table.get_caption()
-
-    def start_row(self, tag):
-        assert tag in ('tr', 'thead', 'tfoot')
-        self._rowtag = tag
-        self._x = 0
-        self._y += 1
-
-    def end_row(self):
-        self._rowtag = None
-
-    def is_row_started(self):
-        return self._rowtag is not None
-
-    def add_cell(self, tag, attrs, text):
-        assert tag in ('td', 'th')
-        assert self.is_row_started()
-        self._x += 1
-        while (self._x, self._y) in self._cells:
-            self._x += 1
-
-        main_cell_contents = text
-        above_cell_contents = ''
-        is_header_cell = (tag == 'th' or self._rowtag == 'thead' or self._rowtag == 'tfoot')
-        if is_header_cell:
-            main_cell_contents = '\\textbf{' + main_cell_contents + '}'
-
-        colspan = rowspan = 1
-        if 'colspan' in attrs:
-            colspan = max(int(attrs['colspan']), 1)
-        if 'rowspan' in attrs:
-            rowspan = max(int(attrs['rowspan']), 1)
-        if rowspan != 1:
-            main_cell_contents = '\\multirow{-' + unicode(rowspan) + '}{*}{' + main_cell_contents + '}'
-            above_cell_contents = '~'
-
-        # FIXME: This is a hack. A very horrible hack, indeed. But it works.
-        background_color = None
-        text_align = None
-        width = None
-        if 'style' in attrs:
-            match = re.search('background-color\s*:\s*([^;]+)', attrs['style'])
-            if match:
-                background_color = match.group(1)
-            match = re.search('text-align\s*:\s*([^;]+)', attrs['style'])
-            if match and match.group(1) in ('left', 'center', 'right'):
-                text_align = match.group(1)
-            match = re.search('width\s*:\s*(\d+(\.\d+)?)%', attrs['style'])
-            if match:
-                width = 0.01*float(match.group(1))
-
-        if background_color is not None:
-            effective_cellcolor = self._css_color_to_rgb(background_color)
-        elif is_header_cell:
-            effective_cellcolor = self._css_color_to_rgb('#f2f2f2')
-        else:
-            effective_cellcolor = 'transparent'
-
-        if text_align is not None:
-            effective_align = text_align[:1]
-        elif is_header_cell:
-            effective_align = 'c'
-        else:
-            effective_align = 'l'
-        if self._x == 1:
-            effective_align = '|' + effective_align + '|'
-        else:
-            effective_align = effective_align + '|'
-
-        if width is not None:
-            self._column_width_constraints.append((range(self._x, self._x + colspan), width))
-
-        effective_cellcolor = 'transparent'
-        if effective_cellcolor != 'transparent' or effective_align not in ('|l|', 'l|') or colspan != 1:
-            #main_cell_contents = '\\raggedright ' + main_cell_contents
-            if effective_cellcolor != 'transparent':
-                main_cell_contents = '\\cellcolor[rgb]{' + effective_cellcolor + '}' + main_cell_contents
-                above_cell_contents = '\\cellcolor[rgb]{' + effective_cellcolor + '}' + above_cell_contents
-            main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{' + main_cell_contents + '}'
-            above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{' + above_cell_contents + '}'
-
-        for x in range(self._x, self._x + colspan):
-            for y in range(self._y, self._y + rowspan):
-                if x == self._x:
-                    cellprefix = '' if x == 1 else '& '
-                    if y == self._y + rowspan - 1:
-                        self._cells[(x, y)] = cellprefix + main_cell_contents
-                    else:
-                        self._cells[(x, y)] = cellprefix + above_cell_contents
-                else:
-                    self._cells[(x, y)] = ''
-
-    def _css_color_to_rgb(self, csscolor):
-        # TODO: add support for named colors
-        if re.match('^#[0-9a-zA-Z]{6}$', csscolor):
-            r = int(csscolor[1:3], 16) / 255.0
-            g = int(csscolor[3:5], 16) / 255.0
-            b = int(csscolor[5:7], 16) / 255.0
-            return "%1.3f,%1.3f,%1.3f" % (r,g,b)
-        elif re.match('^#[0-9a-zA-Z]{3}$'):
-            r = int(csscolor[1:2], 16) / 15.0
-            g = int(csscolor[2:3], 16) / 15.0
-            b = int(csscolor[3:4], 16) / 15.0
-            return "%1.3f,%1.3f,%1.3f" % (r,g,b)
-        else:
-            return None
+        #effective_cellcolor = 'transparent'
+        #if effective_cellcolor != 'transparent' or effective_align not in ('|l|', 'l|') or colspan != 1:
+        #    #main_cell_contents = '\\raggedright ' + main_cell_contents
+        #    if effective_cellcolor != 'transparent':
+        #        main_cell_contents = '\\cellcolor[rgb]{' + effective_cellcolor + '}' + main_cell_contents
+        #        above_cell_contents = '\\cellcolor[rgb]{' + effective_cellcolor + '}' + above_cell_contents
+        #    main_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{' + main_cell_contents + '}'
+        #    above_cell_contents = '\\multicolumn{' + unicode(colspan) + '}{' + effective_align + '}{' + above_cell_contents + '}'
+        #
+        #for x in range(self._x, self._x + colspan):
+        #    for y in range(self._y, self._y + rowspan):
+        #        if x == self._x:
+        #            cellprefix = '' if x == 1 else '& '
+        #            if y == self._y + rowspan - 1:
+        #                self._cells[(x, y)] = cellprefix + main_cell_contents
+        #            else:
+        #                self._cells[(x, y)] = cellprefix + above_cell_contents
+        #        else:
+        #            self._cells[(x, y)] = ''
+            file.write(text)
+            file.write(' &')
 
 
 class HTMLToLaTeX(object):
@@ -562,7 +609,7 @@ class HTMLToLaTeX(object):
         elif tag in ('tr', 'thead', 'tfoot'):
             if context.table is None:
                 raise RuntimeError(tag + ' encountered outside table')
-            context.table.start_row(tag)
+            context.table.start_row(tag, attrs)
             self._process_list(children, context)
             context.table.end_row()
         elif tag in ('td', 'th'):
@@ -634,8 +681,9 @@ class HTMLToLaTeX(object):
 
 
 config = Config(os.path.dirname(os.path.abspath(__file__)) + '/../config')
-page = 'Mm/Bericht-Entwurf'
+#page = 'Mm/Bericht-Entwurf'
 #page = 'Benutzer:Kahrl/Bericht'
+page = 'Benutzer:Kahrl/Sandbox/Table'
 
 with open('report.tex', 'w') as output_file:
     with config.create_wiki_client('VroniPlag', login=False) as client:
